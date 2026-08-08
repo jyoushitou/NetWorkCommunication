@@ -3,8 +3,9 @@
 一个基于 Boost.Asio 的 C++ 网络通讯库,采用 `io_context` 单线程事件循环模型,提供异步 TCP 收发与业务逻辑解耦的消息队列接口。
 
 ## 目的
-- 为WebServer端的通讯模块，由于是内嵌于所有的微服务之间，故分离出此服务通讯架构
+- 为WebService端的通讯模块，由于是内嵌于所有的微服务之间，故分离出此服务通讯架构
 - 同时为网络通讯留档
+- WebService链接：[WebService](https://github.com/jyoushitou/WebService)
 
 ## 特性
 
