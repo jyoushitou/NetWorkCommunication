@@ -26,7 +26,7 @@ namespace Net
         // 构造消息体（只有长度）
         MsgNode(int, int);
         // 构造消息体（有长度和消息ID）
-        MsgNode(int, int, int);
+        MsgNode(unsigned long long, int, int);
         // 析构消息体
         virtual ~MsgNode();
 
@@ -35,7 +35,7 @@ namespace Net
         // 设置当前读取位置
         void SetCurLen(int);
         // 设置消息ID
-        void SetID(int);
+        void SetID(unsigned long long);
 
         // 获取缓存区指针
         char* GetBuf() const;
@@ -44,7 +44,7 @@ namespace Net
         // 获取缓存区总长度
         int GetTotalLen() const;
         // 获取消息ID
-        int GetID() const;
+        unsigned long long GetID() const;
 
         // 禁用拷贝构造函数
         MsgNode(const MsgNode&) = delete;
@@ -59,7 +59,7 @@ namespace Net
         // 当前读取到的位置
         int cur_len;
         // 消息ID
-        int msg_id;
+        unsigned long long msg_id;
     };
 
     // 读取类
@@ -67,7 +67,7 @@ namespace Net
     {
     public:
         // 长度ID构造
-        RecvNode(int, int, int);
+        RecvNode(unsigned long long, int, int);
         // 长度构造
         RecvNode(int, int);
 
@@ -77,7 +77,7 @@ namespace Net
     class SendNode : public MsgNode
     {
     public:
-        SendNode(int, int, int);
+        SendNode(unsigned long long, int, int);
 
     private:
     };
@@ -90,25 +90,30 @@ namespace Net
         // 唯一构造函数
         explicit Connection(boost::asio::ip::tcp::socket, int);
 
+        // 发送函数
+        void ToSend(const std::string&);
+
         // 开始函数
         virtual void Start();
-        // 发送消息
-        void Send(int msg_id, std::string msg);
-        // 关闭连接
-        void Close();
 
         // 取消默认析构函数
         ~Connection() = default;
 
     protected:
+        // 发送消息到发送队列
+        void Send(unsigned long long msg_id, std::string msg);
+        // 发送消息
+        void DoSend();
+        // 关闭连接
+        void Close();
+
         // 读取头部
         void ReadHead();
         // 读取消息体
-        void ReadBody(int, int);
+        void ReadBody(unsigned long long, int);
+
         // 给业务逻辑层函数
-        virtual void ToWork(int, std::string);
-        // 发送消息
-        void DoSend();
+        virtual void ToWork(unsigned long long, std::string);
 
         // socket关闭
         void ActuallyClose();
