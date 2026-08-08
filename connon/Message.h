@@ -1,6 +1,8 @@
 #pragma once
 #include <unordered_map>
 #include <string>
+#include <atomic>
+
 // 服务器ID
 // RPC网关服务（服务器ID=1），负责请求转发与路由
 constexpr int ServiceID_RPCGateway = 1;
@@ -52,4 +54,7 @@ namespace Net
     constexpr int HEAD_LENGTH = HEAD_ID_LENGTH + HEAD_LEN_LENGTH;
     // 最大消息长度（1M）
     constexpr int MAX_LENGTH = 1024 * 1024;
+
+    // 消息ID
+    inline std::atomic<unsigned long long> g_net_msg_id{0};
 } // namespace Net

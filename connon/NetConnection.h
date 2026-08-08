@@ -90,8 +90,14 @@ namespace Net
         // 唯一构造函数
         explicit Connection(boost::asio::ip::tcp::socket, int);
 
-        // 发送函数
+        // 发送任务创建
+        // 隐式msg_id
+        // 一般创建发送函数
         void ToSend(const std::string&);
+        // 发送任务创建
+        // 显式指定 msg_id
+        // 日志追踪用
+        void ToSend(unsigned long long msg_id, const std::string&);
 
         // 开始函数
         virtual void Start();
@@ -112,6 +118,9 @@ namespace Net
         // 读取消息体
         void ReadBody(unsigned long long, int);
 
+        // 连接真正关闭后的回调（派生类可重写，IO线程内触发）
+        virtual void ToClosed();
+
         // 给业务逻辑层函数
         virtual void ToWork(unsigned long long, std::string);
 
@@ -130,5 +139,7 @@ namespace Net
         bool sending;
         // 判断关闭状态
         bool closing;
+        // 防止 ActuallyClose 重复触发回调的标记
+        bool close_notified = false;
     };
 } // namespace Net

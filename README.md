@@ -14,7 +14,8 @@
 - 消息头包含 8 字节消息 ID + 4 字节消息长度,支持自定义业务 ID
 - 发送队列自动串行化,避免多线程并发写 socket
 - 独立的发送/接收缓冲区类(`MsgNode` / `RecvNode` / `SendNode`)
-- 客户端与服务端均提供阻塞式 `WaitForMessage()` 消息队列接口,方便业务线程消费
+- 服务端提供阻塞式 `WaitForMessage()` 消息队列接口,方便业务线程消费
+- 客户端提供回调机制(`SetMessageCallback` / `SetCloseCallback`)接收消息与关闭通知
 - 内置服务 ID 映射宏(`Message.h`),支持多服务路由扩展
 
 ## 环境依赖
@@ -137,23 +138,35 @@ net_thread.join();
 ```cpp
 boost::asio::io_context io;
 
-// 创建客户端并连接
+// 创建客户端并连接（必须先调用 Connect() 再启动 io 线程）
 auto client = std::make_shared<Net::Client::Client>(io, ServiceID_SQL);
 client->Connect("127.0.0.1", "60000");
+
+// 注册消息回调（在 io_context 线程中执行）
+client->SetMessageCallback([](unsigned long long msg_id, std::string msg) {
+    std::cout << "收到回复 ID=" << msg_id << " 内容=" << msg << std::endl;
+});
+
+// 注册关闭回调
+client->SetCloseCallback([]() {
+    std::cout << "连接已关闭" << std::endl;
+});
 
 // 网络线程
 std::thread net_thread([&io] { io.run(); });
 
-// 业务主线程：阻塞等待回复
-while (true) {
-    auto [msg_id, msg] = client->WaitForMessage();
-    if (msg_id == -1ULL) break;  // 连接关闭或解析失败
-
-    std::cout << "收到回复 ID=" << msg_id << " 内容=" << msg << std::endl;
-    break;
-}
+// 业务线程：通过 ToSend() 发送消息（线程安全，内部 post 到 IO 线程）
+std::thread send_thread([&client] {
+    while (true) {
+        std::string line;
+        std::getline(std::cin, line);
+        if (line == "quit") break;
+        client->ToSend(line);
+    }
+});
 
 net_thread.join();
+send_thread.join();
 ```
 
 ## 设计说明
@@ -169,6 +182,8 @@ net_thread.join();
 ## 已知问题与修复记录
 
 - **构造函数参数顺序错误**(`MsgNode(int, int)`):委托构造时参数位置写反,导致 `max_len` 被传入 `-1ULL` 截断为 `-1`,触发 `max_len 必须大于 0` 错误、缓冲区未分配。已修复为 `MsgNode(-1ULL, max_len, serviceID)`。
+
+- **客户端 io_context 线程提前退出**(`Client/source/main.cpp` 的 `CreateConnection`):原代码先启动 `io_thread` 执行 `conn->io->run()`,但此时 `io_context` 中没有任何异步任务,`run()` 立即返回,线程随之结束;之后才调用 `Connect()`,导致 `async_resolve` 排入队列却无人驱动,连接永远不会建立,控制台无任何输出。已修复为先调用 `Connect()` 再启动 `io_thread`。
 
 ## 许可证
 

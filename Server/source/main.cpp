@@ -100,7 +100,7 @@ void RunServer(int port, int ServiceID_)
         auto [session, msg_id, msg] = g_server->WaitForMessage();
 
         // 收到终止信号
-        if (!session && msg_id == -1ULL && msg == "close")
+        if (!session && msg == "close")
         {
             Utils::Out_Msg("服务器正在退出...", ServiceID_);
             break;

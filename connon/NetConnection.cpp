@@ -122,6 +122,15 @@ namespace Net
         sock.close(ec);
         Utils::Out_Msg("socket，正在清空队列完成", serviceID);
         send_queue.clear();
+        // 防止多次通知关闭
+        if (!close_notified)
+        {
+            // 通知设为真
+            close_notified = true;
+
+            // 回调函数
+            ToClosed();
+        }
     }
 
     // 关闭函数
@@ -285,17 +294,17 @@ namespace Net
                                 });
     }
 
-    // 外部发送函数
     void Connection::ToSend(const std::string& msg)
     {
-        // 当前消息ID
-        static unsigned long long ID = 0;
+        // 原子自增，线程安全
+        ToSend(g_net_msg_id.fetch_add(1, std::memory_order_relaxed), msg);
+    }
 
+    // 外部发送函数
+    void Connection::ToSend(unsigned long long msg_id, const std::string& msg)
+    {
         // 加入发送队列
-        Send(ID, msg);
-
-        // 消息ID自增
-        ID++;
+        Send(msg_id, msg);
     }
 
     // 发送函数队列
@@ -421,6 +430,11 @@ namespace Net
                                          }
                                      }
                                  });
+    }
+
+    // 基类默认空实现，派生类可按需重写
+    void Connection::ToClosed()
+    {
     }
 
     // 基类默认空实现，派生类可根据需要重写

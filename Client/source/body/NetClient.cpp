@@ -19,7 +19,7 @@ namespace Net
 
         // 构造函数
         Client::Client(boost::asio::io_context& io, int serviceID)
-            : Connection(boost::asio::ip::tcp::socket(io), serviceID), ioc(io), resolver(io), running(true)
+            : Connection(boost::asio::ip::tcp::socket(io), serviceID), ioc(io), resolver(io)
         {
         }
 
@@ -31,16 +31,15 @@ namespace Net
 
             // 使用成员resolver（必须作为成员，保证异步解析期间resolver对象存活）
             resolver.async_resolve(host, port,
-                                   [this, self, host](const boost::system::error_code& ec,
-                                                      boost::asio::ip::tcp::resolver::results_type endpoints)
+                                   [this, self, host, port](const boost::system::error_code& ec,
+                                                            boost::asio::ip::tcp::resolver::results_type endpoints)
                                    {
                                        // 如果有错误
                                        if (ec)
                                        {
                                            Utils::Out_Err("解析地址失败: " + ec.what(), serviceID);
                                            // 通知主线程退出，防止 WaitForMessage 永久阻塞
-                                           ToWork(-1ULL, "resolve_failed");
-                                           Stop();
+                                           Close();
                                            return;
                                        }
 
@@ -53,6 +52,7 @@ namespace Net
                                                if (ec_conect)
                                                {
                                                    Utils::Out_Err("连接失败: " + ec_conect.what(), serviceID);
+                                                   Close();
                                                    return;
                                                }
 
@@ -62,60 +62,38 @@ namespace Net
                                    });
         }
 
+        // 注册消息回调
+        void Client::SetMessageCallback(std::function<void(unsigned long long, std::string)> cb)
+        {
+            message_cb = std::move(cb);
+        }
+
+        // 注册关闭回调
+        void Client::SetCloseCallback(std::function<void()> cb)
+        {
+            close_cb = std::move(cb);
+        }
+
+        // 给工作任务
         void Client::ToWork(unsigned long long msg_id, std::string msg)
         {
+            if (message_cb)
             {
-                // 加锁放入队列
-                std::lock_guard<std::mutex> lock(queue_mutex);
-                msg_queue.emplace(msg_id, std::move(msg));
+                message_cb(msg_id, std::move(msg));
             }
-            // 唤醒等待中的主线程
-            queue_cv.notify_one();
         }
 
-        // 主线程调用：阻塞等待一条消息
-        std::pair<unsigned long long, std::string> Client::WaitForMessage()
+        // 连接彻底关闭，触发关闭回调
+        void Client::ToClosed()
         {
-            // 加锁
-            std::unique_lock<std::mutex> lock(queue_mutex);
-
-            // 等待队列非空或停止信号
-            queue_cv.wait(lock, [this]() { return !msg_queue.empty() || !running; });
-
-            // 如果是停止信号且队列为空，返回终止标记
-            if (msg_queue.empty())
-            {
-                return {-1ULL, "close"};
-            }
-
-            // 取出队首消息
-            auto msg = std::move(msg_queue.front());
-            // 弹出队首消息
-            msg_queue.pop();
-            return msg;
+            if (close_cb)
+                close_cb();
         }
 
-        // 非阻塞检查
-        bool Client::HasMessage()
-        {
-            // 加锁
-            std::lock_guard<std::mutex> lock(queue_mutex);
-            // 队列为空则返回false，有消息返回true
-            return !msg_queue.empty();
-        }
-
-        // 停止函数
+        // Stop：从外部线程安全调用
         void Client::Stop()
         {
-            {
-                // 加锁
-                std::lock_guard<std::mutex> lock(queue_mutex);
-                // 判断是否在跑
-                running = false;
-            }
-            // 唤醒主线程，让它退出等待
-            queue_cv.notify_all();
-            // 关闭连接
+            // 基类 Close() 内部 post 到 IO 线程，线程安全
             Close();
         }
 
