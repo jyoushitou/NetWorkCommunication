@@ -20,8 +20,6 @@ struct ConnItem
     std::unique_ptr<boost::asio::io_context> io;
     std::shared_ptr<Net::Client::Client> client;
     std::thread io_thread;
-    std::string host;
-    std::string port;
 };
 
 // ============ 全局状态 ============
@@ -29,6 +27,10 @@ struct ConnItem
 std::vector<std::shared_ptr<ConnItem>> g_conns;
 // 运行标志（回调线程只碰这个）
 std::atomic<bool> g_running{true};
+// 总连接数（CreateConnection 中递增）
+std::atomic<size_t> g_total_conns{0};
+// 已关闭连接数（OnClose 中递增）
+std::atomic<size_t> g_closed_conns{0};
 // 退出事件（主线程等待它）
 HANDLE g_exit_event = nullptr;
 
@@ -56,19 +58,22 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType)
 
 // ============ 业务回调（各自连接的 IO 线程中执行） ============
 
-void OnMessage(size_t idx, int serviceID, unsigned long long msg_id, const std::string& msg)
+void Work(size_t idx, int serviceID, unsigned long long msg_id, const std::string& msg)
 {
     Utils::Out_Net_Msg(msg_id, "线程" + std::to_string(idx) + "收到消息: " + msg, serviceID);
 }
 
-void OnClose(size_t idx, int serviceID)
+void Close_Main(size_t idx, int serviceID)
 {
     Utils::Out_Msg("正在关闭:" + std::to_string(static_cast<int>(10 + idx)) + "线程", serviceID);
 
-    // 统计存活连接数，全部关闭后 SetEvent(g_exit_event) 让主线程退出
-    static std::atomic<int> closed_count{0};
-    Utils::Out_Msg("当前剩余线程数，" + std::to_string(1 - closed_count), serviceID);
-    if (++closed_count == 1)
+    // 统计已关闭数（fetch_add 返回旧值，+1 得到新值）
+    size_t closed = g_closed_conns.fetch_add(1) + 1;
+    size_t remain = g_total_conns.load() - closed;
+    Utils::Out_Msg("当前剩余线程数，" + std::to_string(remain), serviceID);
+
+    // 全部关闭后唤醒主线程
+    if (closed == g_total_conns.load())
     {
         g_running = false;
         SetEvent(g_exit_event);
@@ -80,19 +85,28 @@ void OnClose(size_t idx, int serviceID)
 void CreateConnection(size_t idx, int serviceID, const std::string& host, const std::string& port)
 {
     Utils::Out_Msg("正在连接", serviceID);
-    auto conn = std::make_shared<ConnItem>();
-    conn->io = std::make_unique<boost::asio::io_context>();
-    conn->host = host;
-    conn->port = port;
 
+    // 线程数统计自增
+    g_total_conns.fetch_add(1);
+
+    // 创建io_context的线程指针
+    auto conn = std::make_shared<ConnItem>();
+
+    // 创建专属io_context
+    conn->io = std::make_unique<boost::asio::io_context>();
+
+    // 创建线程独立的客户端
     conn->client = std::make_shared<Net::Client::Client>(*conn->io, serviceID);
 
     // 注册回调（捕获 idx，避免共享状态）
     conn->client->SetMessageCallback([idx, serviceID](unsigned long long id, std::string msg)
-                                     { OnMessage(idx, serviceID, id, msg); });
-    conn->client->SetCloseCallback([idx, serviceID]() { OnClose(idx, serviceID); });
+                                     { Work(idx, serviceID, id, msg); });
 
-    conn->client->Connect(host, port); // 异步连接，先发起连接保证 io_context 中有任务
+    // 设置关闭回调
+    conn->client->SetCloseCallback([idx, serviceID]() { Close_Main(idx, serviceID); });
+
+    // 异步连接，先发起连接保证 io_context 中有任务
+    conn->client->Connect(host, port);
 
     // 每连接 1 个线程驱动自己的 io_context
     conn->io_thread = std::thread(
@@ -101,6 +115,7 @@ void CreateConnection(size_t idx, int serviceID, const std::string& host, const 
             conn->io->run(); // 阻塞直到该连接 Stop() 后 io_context 无任务
         });
 
+    // 将独立io_context加入数组
     g_conns.push_back(conn);
 }
 
