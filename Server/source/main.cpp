@@ -174,7 +174,7 @@ int main()
 {
     Utils::init();
 
-    RunHttpServer(60000, 8080, 1);
+    RunServer(60000, 1);
 
     Utils::Out_Msg("服务器退出", 1);
 

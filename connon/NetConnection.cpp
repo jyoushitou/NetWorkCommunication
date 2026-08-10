@@ -206,7 +206,7 @@ namespace Net
                                         return;
                                     }
 
-                                    Utils::Out_Msg("解析完成！ID：" + std::to_string(msg_id) + "长度：" +
+                                    Utils::Out_Msg("解析完成！ID：" + std::to_string(msg_id) + "，长度：" +
                                                        std::to_string(msg_len),
                                                    serviceID);
                                     if (!closing)
@@ -313,7 +313,7 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        Utils::Out_Net_Msg(msg_id, "\n正在构建发送队列", serviceID);
+        Utils::Out_Net_Msg(msg_id, "正在构建发送队列", serviceID);
 
         // 获得其他线程的发送调用
         boost::asio::post(sock.get_executor(),
