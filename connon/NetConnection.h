@@ -106,17 +106,8 @@ namespace Net
         ~Connection() = default;
 
     protected:
-        // 发送消息到发送队列
-        void Send(unsigned long long msg_id, std::string msg);
-        // 发送消息
-        void DoSend();
         // 关闭连接
         void Close();
-
-        // 读取头部
-        void ReadHead();
-        // 读取消息体
-        void ReadBody(unsigned long long, int);
 
         // 连接真正关闭后的回调（派生类可重写，IO线程内触发）
         virtual void ToClosed();
@@ -124,21 +115,36 @@ namespace Net
         // 给业务逻辑层函数
         virtual void ToWork(unsigned long long, std::string);
 
+        // 发送消息到发送队列
+        void Send(unsigned long long msg_id, std::string msg);
+
         // socket关闭
         void ActuallyClose();
 
-        // 存储socket
-        boost::asio::ip::tcp::socket sock;
-        // 存储读取缓存
-        std::shared_ptr<RecvNode> recv_node;
         // 保存服务器ID
         int serviceID;
+        // 存储socket
+        boost::asio::ip::tcp::socket sock;
+
+    private:
+        // 发送消息
+        void DoSend();
+
+        // 读取头部
+        void ReadHead();
+        // 读取消息体
+        void ReadBody(unsigned long long, int);
+
+        // 存储读取缓存
+        std::shared_ptr<RecvNode> recv_node;
         // 发送队列
         std::deque<std::shared_ptr<SendNode>> send_queue;
+
         // 判断是否在发送
         bool sending;
         // 判断关闭状态
         bool closing;
+
         // 防止 ActuallyClose 重复触发回调的标记
         bool close_notified = false;
     };

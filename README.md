@@ -1,5 +1,12 @@
 # NetWorkCommunication
 
+![C++](https://img.shields.io/badge/C%2B%2B-17-blue)
+![Boost.Asio](https://img.shields.io/badge/Boost-Asio-orange)
+![Boost.Beast](https://img.shields.io/badge/Boost-Beast-yellow)
+![CMake](https://img.shields.io/badge/build-CMake-brightgreen)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 一个基于 Boost.Asio 的 C++ 网络通讯库,采用 `io_context` 单线程事件循环模型,提供异步 TCP 收发与业务逻辑解耦的消息队列接口。
 
 ## 目的
@@ -18,6 +25,7 @@
 - 独立的发送/接收缓冲区类(`MsgNode` / `RecvNode` / `SendNode`)
 - 服务端提供阻塞式 `WaitForMessage()` / 非阻塞式 `HasMessage()` 消息队列接口
 - 服务端支持优雅退出：`Stop()` + 信号处理（Ctrl+C / taskkill / 关闭窗口）
+- **HTTP 服务器支持（Boost.Beast）**：基于 `HttpServer` / `HttpSession` 派生类，可同时监听 TCP 二进制协议端口与 HTTP 端口，直接对接 Vue3 前端
 - 客户端支持多连接并行（每连接独立 `io_context` + 独立线程)
 - 客户端提供回调机制(`SetMessageCallback` / `SetCloseCallback`)接收消息与关闭通知
 - 内置服务 ID 映射宏(`Message.h`,支持 1~16 号服务路由扩展)
@@ -26,7 +34,7 @@
 
 - CMake >= 3.16
 - C++17
-- Boost(asio / system / thread)
+- Boost(asio / system / thread / beast)
 - vcpkg(推荐)或系统安装的 Boost
   - CMakeLists 会自动检测 `VCPKG_ROOT` 环境变量或项目内 `vcpkg/` 目录作为工具链
 
@@ -42,12 +50,14 @@ NetWorkCommunication/
 │   └── Utils.cpp            # 日志输出工具实现
 ├── Server/                  # 服务端示例
 │   └── source/
-│       ├── main.cpp         # 服务端入口，信号处理/优雅退出/等待并回复消息
+│       ├── main.cpp         # 服务端入口，信号处理/优雅退出/等待并回复消息/HTTP 服务器启动
 │       ├── CMakeLists.txt   # 自动检测 vcpkg 工具链、/MP /FS /utf-8 编译选项
 │       ├── include/
-│       │   └── NetServer.h  # Server / Session 声明
+│       │   ├── NetServer.h      # Server / Session 声明
+│       │   └── NetHttpServer.h  # HttpServer / HttpSession 声明（Vue3 前端 HTTP 接入）
 │       └── body/
-│           └── NetServer.cpp # accept、会话管理、线程安全消息队列、WaitForMessage
+│           ├── NetServer.cpp    # accept、会话管理、线程安全消息队列、WaitForMessage
+│           └── NetHttpServer.cpp # Beast HTTP 解析、HttpServer/HttpSession 实现
 ├── Client/                  # 客户端示例
 │   ├── source/
 │   │   ├── main.cpp         # 客户端入口，支持多连接、事件机制优雅退出
@@ -76,7 +86,7 @@ NetWorkCommunication/
 ### 使用 vcpkg 安装 Boost
 
 ```bash
-vcpkg install boost-asio boost-system boost-thread
+vcpkg install boost-asio boost-system boost-thread boost-beast
 ```
 
 ### 设置 vcpkg 工具链（CMakeLists 自动检测）
@@ -198,6 +208,37 @@ net_thread.join();
 send_thread.join();
 ```
 
+### HTTP 服务器（Vue3 前端接入）
+
+```cpp
+// 创建 HTTP 服务器：同时监听 TCP 二进制协议端口 60000 与 HTTP 端口 8080
+boost::asio::io_context io;
+boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), 60000);
+
+// 创建 HttpServer 实例（继承 Server，额外传入 HTTP 端口）
+auto http_server = std::make_shared<Net::Server::HttpServer::HttpServer>(io, ep, ServiceID_RPCGateway, 8080);
+
+// 开始接收 HTTP 请求（Vue3 前端）
+http_server->StartHttpAccept();
+
+// （可选）如果还要接收原生 TCP 客户端，取消注释下面这行：
+// http_server->StartAccept();
+
+// 网络线程
+std::thread io_thread([&io] { io.run(); });
+
+// 主线程等待退出标志（Ctrl+C / taskkill / 关闭窗口触发优雅退出）
+while (!g_exit_flag) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+
+// 优雅退出：同时关闭 TCP 与 HTTP 监听器
+http_server->Stop();
+io_thread.join();
+```
+
+`HttpServer` / `HttpSession` 位于 `Server/source/include/NetHttpServer.h` 与 `Server/source/body/NetHttpServer.cpp`，基于 Boost.Beast 实现 HTTP 解析，`HandleVueRequest()` 可重写以处理 Vue3 前端的请求并返回 JSON 响应。
+
 ### 客户端多连接（14 业务服务并行）
 
 `Client/source/main.cpp` 内置了多连接架构：
@@ -230,6 +271,8 @@ for (size_t i = 0; i < 18; ++i) {
    - 服务端：`Stop()` 关闭 acceptor、通知所有 Session 停止、唤醒 `WaitForMessage()` 返回终止标记，并支持 SIGINT / Windows 控制台事件处理。
    - 客户端：Windows 下使用事件对象（`CreateEvent` + `WaitForSingleObject`）挂起主线程，Ctrl+C 时由系统回调线程仅设置事件唤醒主线程，主线程再安全地执行 `Stop()` → `join()` 清理流程（避免在系统回调线程中调用 `Stop()` 的线程安全问题）。
 
+8. **HTTP 服务器集成**：`HttpServer` 继承 `Server`，在同一个 `io_context` 中同时运行 TCP 二进制协议监听器与 HTTP 监听器。`HttpSession` 继承 `Session` 并重写 `Start()`，通过 Boost.Beast 的 `request_parser` 解析 HTTP 请求，解析完成后调用 `HandleVueRequest()` 处理业务并返回 JSON 响应。关闭时 `Stop()` 会同时关闭 TCP 与 HTTP 两个 acceptor。
+
 ## 已知问题与修复记录
 
 - **构造函数参数顺序错误**(`MsgNode(int, int)`):委托构造时参数位置写反，导致 `max_len` 被传入 `-1ULL` 截断为 `-1`，触发 `max_len 必须大于 0` 错误、缓冲区未分配。已修复为 `MsgNode(-1ULL, max_len, serviceID)`。
@@ -247,6 +290,8 @@ for (size_t i = 0; i < 18; ++i) {
 - **关闭回调重复触发**:`ActuallyClose()` 可能被 `ReadHead` 错误、`ReadBody` 错误、`Close()` 等多次调用路径触发。已添加 `close_notified` 标记，保证 `ToClosed()` 只被调用一次。
 
 - **关闭后继续读消息**:连接正在关闭(`closing=true`)时，`ReadHead` 解析到的消息直接丢弃并立即 `ActuallyClose()`，避免对已关闭连接继续发起异步读。
+
+- **HTTP 会话默认不保持长连接**:`HttpSession::HttpSendResponse()` 在发送完 HTTP 响应后立即调用 `ActuallyClose()` 关闭连接。Vue3 前端每次请求都会新建 TCP 连接，适用于短请求/低频率场景；如需 keep-alive 长连接，需在 `HttpSendResponse()` 中移除末尾的 `ActuallyClose()` 并调用 `Start()` 复用解析器（注意重置 `parser_`）。
 
 ## 许可证
 

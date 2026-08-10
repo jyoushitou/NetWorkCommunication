@@ -63,7 +63,7 @@ void Work(size_t idx, int serviceID, unsigned long long msg_id, const std::strin
     Utils::Out_Net_Msg(msg_id, "线程" + std::to_string(idx) + "收到消息: " + msg, serviceID);
 }
 
-void Close_Main(size_t idx, int serviceID)
+void Close(size_t idx, int serviceID)
 {
     Utils::Out_Msg("正在关闭:" + std::to_string(static_cast<int>(10 + idx)) + "线程", serviceID);
 
@@ -103,7 +103,7 @@ void CreateConnection(size_t idx, int serviceID, const std::string& host, const 
                                      { Work(idx, serviceID, id, msg); });
 
     // 设置关闭回调
-    conn->client->SetCloseCallback([idx, serviceID]() { Close_Main(idx, serviceID); });
+    conn->client->SetCloseCallback([idx, serviceID]() { Close(idx, serviceID); });
 
     // 异步连接，先发起连接保证 io_context 中有任务
     conn->client->Connect(host, port);

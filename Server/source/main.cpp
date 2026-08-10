@@ -2,6 +2,7 @@
 #include "NetServer.h"
 #include "Utils.h"
 #include "Message.h"
+#include "NetHttpServer.h"
 
 #include <boost/asio.hpp>
 
@@ -122,11 +123,58 @@ void RunServer(int port, int ServiceID_)
     io_thread.join();
 }
 
+// 启动 HTTP 服务器的函数
+void RunHttpServer(int tcp_port, unsigned short http_port, int ServiceID_)
+{
+    Utils::Out_Msg("正在启动 HTTP 服务器（TCP端口=" + std::to_string(tcp_port) +
+                       ", HTTP端口=" + std::to_string(http_port) + "）",
+                   ServiceID_);
+
+    // 1. 创建 io_context
+    boost::asio::io_context io;
+
+    // 2. 创建 TCP 端点
+    boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), tcp_port);
+
+    // 3. 创建 HttpServer 实例
+    g_server = std::make_shared<Net::Server::HttpServer::HttpServer>(io, ep, ServiceID_, http_port);
+
+    // 4. 开始接收 HTTP 请求
+    std::dynamic_pointer_cast<Net::Server::HttpServer::HttpServer>(g_server)->StartHttpAccept();
+
+    // 5. （可选）如果还要接收 TCP 客户端，取消注释下面这行：
+    //
+    // g_server->StartAccept();
+
+    Utils::Out_Msg("HTTP 服务器已启动，等待 Vue 前端请求...", ServiceID_);
+
+    // 6. 注册退出信号
+    std::signal(SIGINT, OnSignal);
+#ifdef _WIN32
+    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+#endif
+
+    // 7. io_context 在独立线程运行
+    std::thread io_thread([&io]() { io.run(); });
+
+    // 8. 主线程等待退出标志
+    while (!g_exit_flag)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // 9. 优雅退出
+    g_server->Stop();
+
+    // 10. 等待 io_context 线程结束
+    io_thread.join();
+}
+
 int main()
 {
     Utils::init();
 
-    RunServer(60000, 1);
+    RunHttpServer(60000, 8080, 1);
 
     Utils::Out_Msg("服务器退出", 1);
 
