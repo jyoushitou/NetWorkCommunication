@@ -1,3 +1,10 @@
+/*
+ * @file        NetConnection.h
+ * @brief       网络通讯连接核心（消息缓存、读写、发送队列）
+ * @author      jyoushitou
+ * @date        2026-09-16
+ * @copyright   Copyright (c) 2026
+ */
 #pragma once
 #include <memory>
 #include <string>
@@ -24,18 +31,18 @@ namespace Net
     {
     public:
         // 构造消息体（只有长度）
-        MsgNode(int, int);
+        MsgNode(int max_len);
         // 构造消息体（有长度和消息ID）
-        MsgNode(unsigned long long, int, int);
+        MsgNode(unsigned long long msg_id_, int max_len);
         // 析构消息体
         virtual ~MsgNode();
 
         // 清空缓存
         void Clear();
         // 设置当前读取位置
-        void SetCurLen(int);
+        void SetCurLen(int len);
         // 设置消息ID
-        void SetID(unsigned long long);
+        void SetID(unsigned long long msg_id_);
 
         // 获取缓存区指针
         char* GetBuf() const;
@@ -67,9 +74,9 @@ namespace Net
     {
     public:
         // 长度ID构造
-        RecvNode(unsigned long long, int, int);
+        RecvNode(unsigned long long msg_id, int max_len);
         // 长度构造
-        RecvNode(int, int);
+        RecvNode(int max_len);
 
     private:
     };
@@ -77,7 +84,7 @@ namespace Net
     class SendNode : public MsgNode
     {
     public:
-        SendNode(unsigned long long, int, int);
+        SendNode(unsigned long long msg_id_, int max_len);
 
     private:
     };
@@ -88,16 +95,16 @@ namespace Net
     {
     public:
         // 唯一构造函数
-        explicit Connection(boost::asio::ip::tcp::socket, int);
+        explicit Connection(boost::asio::ip::tcp::socket socket);
 
         // 发送任务创建
         // 隐式msg_id
         // 一般创建发送函数
-        void ToSend(const std::string&);
+        void ToSend(const std::string& msg);
         // 发送任务创建
         // 显式指定 msg_id
         // 日志追踪用
-        void ToSend(unsigned long long msg_id, const std::string&);
+        void ToSend(unsigned long long msg_id, const std::string& msg);
 
         // 开始函数
         virtual void Start();
@@ -121,8 +128,6 @@ namespace Net
         // socket关闭
         void ActuallyClose();
 
-        // 保存服务器ID
-        int serviceID;
         // 存储socket
         boost::asio::ip::tcp::socket sock;
 
@@ -133,7 +138,7 @@ namespace Net
         // 读取头部
         void ReadHead();
         // 读取消息体
-        void ReadBody(unsigned long long, int);
+        void ReadBody(unsigned long long msg_id, int msg_len);
 
         // 存储读取缓存
         std::shared_ptr<RecvNode> recv_node;

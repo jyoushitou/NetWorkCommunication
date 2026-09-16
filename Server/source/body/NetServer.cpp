@@ -1,3 +1,11 @@
+/// @file        NetServer.cpp
+/// @brief       TCP 服务器与连接会话实现（Session / Server）
+/// @author      jyoushitou
+/// @date        2026-09-16
+/// @copyright   Copyright (c) 2026
+/// Distributed under the MIT License. See LICENSE file.
+
+//
 #include "NetServer.h"
 
 namespace Net
@@ -6,14 +14,18 @@ namespace Net
     {
         //===Session===
         // 构造函数
-        Session::Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock, int serviceID_,
-                         Server* server_)
-            : Connection(std::move(sock), serviceID_), ioc(io), stop(false), server(server_)
+        Session::Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
+                         std::unique_ptr<PushMessage> PMFunction)
+            : Connection(std::move(sock)), ioc(io), stop(false), PMFunc(std::move(PMFunction))
         {
         }
 
-        // 停止函数
-        void Session::Stop()
+        /// @brief      停止函数
+        /// @details    跨线程投递关闭操作到 io_context 线程并关闭连接
+        /// @warning
+        /// @note
+
+        void Server::Stop()
         {
             // 跨线程投递关闭操作到 io_context 线程
             auto self = shared_from_this();
@@ -25,33 +37,35 @@ namespace Net
                               });
         }
 
-        // 工作函数
+        /// @brief      工作函数（读取到消息后的业务处理）
+        /// @details    输出消息并把消息投递到服务器的队列，等待主线程处理
+        /// @param[in] msg_id 消息全局唯一ID
+        /// @param[in] msg 消息序列化字符串
+        /// @warning
+        /// @note
         void Session::ToWork(unsigned long long msg_id, std::string msg)
         {
             // 输出收到的消息
-            Utils::Out_Net_Msg(msg_id, "收到客户端消息:" + msg, serviceID);
+            Utils::Out::Out_Net_Msg(msg_id, "收到客户端消息:" + msg);
 
             // 把消息投递到服务器的队列，等待主线程处理
-            if (server)
+            if (PMFunc != nullptr)
             {
-                server->PushMessage(shared_from_this(), msg_id, std::move(msg));
+                (*PMFunc)(shared_from_this(), msg_id, std::move(msg));
             }
         }
 
         // 主线程调用：向该客户端回复一条消息
         void Session::Reply(unsigned long long msg_id, std::string msg)
         {
-            Utils::Out_Msg("处理完成回复消息中", serviceID);
-            Send(msg_id, std::move(msg));
+            Utils::Out::Out_Msg("处理完成回复消息中");
+            ToSend(msg_id, std::move(msg));
         }
 
         //===Server===
-        Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, int serviceID_)
+        Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep)
             : ioc(io), acceptor(io), running(true)
         {
-            // 给service赋值
-            serviceID = serviceID_;
-
             // 打开连接
             acceptor.open(ep.protocol());
             // 设置
@@ -83,8 +97,9 @@ namespace Net
                                       if (!ec)
                                       {
                                           // 为每个连接创建一个 Session（传入 this 指针以便消息投递到 Server 队列）
-                                          auto session =
-                                              std::make_shared<Session>(ioc, std::move(*sock), serviceID, this);
+                                          auto session = std::make_shared<Session>(
+                                              ioc, std::move(*sock),
+                                              std::make_unique<PushMessage>(this->PushMessage()));
                                           sessions.push_back(session);
                                           // 启动读（继承自 Connection::Start()）
                                           session->Start();
@@ -95,7 +110,7 @@ namespace Net
                                       else
                                       {
                                           // 仅在服务器仍在运行时，才输出真正的 accept 错误
-                                          Utils::Out_Err("accept 错误: " + ec.what(), serviceID);
+                                          Utils::Out::Out_Err("accept 错误: " + ec.what());
                                       }
                                   });
         }
@@ -133,7 +148,8 @@ namespace Net
         }
 
         // 投递消息到队列（IO线程调用）
-        void Server::PushMessage(const std::shared_ptr<Session>& session, unsigned long long msg_id, std::string msg)
+        void Server::PushMessage(const std::shared_ptr<Session>& session, unsigned long long msg_id,
+                                 const std::string& msg)
         {
             {
                 // 加锁放入队列

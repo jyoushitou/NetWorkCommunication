@@ -1,3 +1,12 @@
+/*
+ * @file        Message.h
+ * @brief       服务ID定义与网络协议常量
+ * @author      jyoushitou
+ * @date        2026-09-16
+ * @copyright   Copyright (c) 2026
+ */
+
+// 防止重复包含
 #pragma once
 #include <unordered_map>
 #include <string>
@@ -55,6 +64,6 @@ namespace Net
     // 最大消息长度（1M）
     constexpr int MAX_LENGTH = 1024 * 1024;
 
-    // 消息ID
+    // 全局消息ID（原子自增，线程安全）
     inline std::atomic<unsigned long long> g_net_msg_id{0};
 } // namespace Net

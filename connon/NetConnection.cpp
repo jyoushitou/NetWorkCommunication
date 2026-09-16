@@ -1,3 +1,12 @@
+/*
+ * @file        NetConnection.cpp
+ * @brief       网络通讯连接核心实现（消息缓存、读写、发送队列）
+ * @author      jyoushitou
+ * @date        2026-09-16
+ * @copyright   Copyright (c) 2026
+ */
+
+// 头文件
 #include "NetConnection.h"
 
 namespace Net
@@ -9,24 +18,24 @@ namespace Net
                htonl(static_cast<uint32_t>(value >> 32));
     }
 
+    // 64位网络字节序转主机字节序（与 htonll 对称）
     static uint64_t ntohll(uint64_t value)
     {
         return htonll(value); // 对称操作
     }
 
     // 构造函数（只有长度）
-    MsgNode::MsgNode(int max_len, int serviceID) : MsgNode(-1ULL, max_len, serviceID)
+    MsgNode::MsgNode(int max_len) : MsgNode(-1ULL, max_len)
     {
     }
 
     // 构造函数（有消息Id和长度）
-    MsgNode::MsgNode(unsigned long long msg_id_, int max_len, int serviceID)
-        : buf(nullptr), total_len(0), cur_len(0), msg_id(msg_id_)
+    MsgNode::MsgNode(unsigned long long msg_id_, int max_len) : buf(nullptr), total_len(0), cur_len(0), msg_id(msg_id_)
     {
         // 防御性检查：max_len 必须为正数
         if (max_len <= 0)
         {
-            Utils::Out_Err("MsgNode: max_len 必须大于 0", serviceID);
+            Utils::Out::Out_Err("MsgNode: max_len 必须大于 0");
             return;
         }
 
@@ -87,40 +96,46 @@ namespace Net
     }
 
     // 接收长度ID节点
-    RecvNode::RecvNode(unsigned long long msg_id, int max_len, int serviceID) : MsgNode(msg_id, max_len, serviceID)
+    RecvNode::RecvNode(unsigned long long msg_id, int max_len) : MsgNode(msg_id, max_len)
     {
     }
 
     // 接收长度节点
-    RecvNode::RecvNode(int max_len, int serviceID) : MsgNode(max_len, serviceID)
+    RecvNode::RecvNode(int max_len) : MsgNode(max_len)
     {
     }
 
     // 发送节点
-    SendNode::SendNode(unsigned long long msg_id_, int max_len, int serviceID) : MsgNode(msg_id_, max_len, serviceID)
+    SendNode::SendNode(unsigned long long msg_id_, int max_len) : MsgNode(msg_id_, max_len)
     {
     }
 
     // 唯一构造函数
-    Connection::Connection(boost::asio::ip::tcp::socket socket, int serviceID_)
-        : sock(std::move(socket)), serviceID(serviceID_), sending(false), closing(false)
+    Connection::Connection(boost::asio::ip::tcp::socket socket) : sock(std::move(socket))
     {
+        // 发送状态
+        // 初始化为false
+        sending = false;
+        // 关闭状态
+        // 初始化为false
+        closing = false;
     }
 
     // 开始
     void Connection::Start()
     {
+        // 启动读取函数
         ReadHead();
     }
 
     // socket关闭
     void Connection::ActuallyClose()
     {
-        Utils::Out_Msg("正在关闭socket", serviceID);
+        Utils::Out::Out_Msg("正在关闭socket");
         boost::system::error_code ec;
         sock.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         sock.close(ec);
-        Utils::Out_Msg("socket，正在清空队列完成", serviceID);
+        Utils::Out::Out_Msg("socket，正在清空队列完成");
         send_queue.clear();
         // 防止多次通知关闭
         if (!close_notified)
@@ -137,7 +152,7 @@ namespace Net
     // API 允许外部线程调用
     void Connection::Close()
     {
-        Utils::Out_Msg("正在关闭Session", serviceID);
+        Utils::Out::Out_Msg("正在关闭Session");
 
         // 保活
         auto self = shared_from_this();
@@ -158,16 +173,16 @@ namespace Net
     // 读消息体头部
     void Connection::ReadHead()
     {
-        Utils::Out_Msg("等待读取消息初始化", serviceID);
+        Utils::Out::Out_Msg("等待读取消息初始化");
         // 保活
         auto self = shared_from_this();
 
         // 申请缓存
-        recv_node = std::make_shared<RecvNode>(HEAD_LENGTH, serviceID);
+        recv_node = std::make_shared<RecvNode>(HEAD_LENGTH);
         // 初始化缓存
         recv_node->Clear();
 
-        Utils::Out_Msg("初始化完成等待数据", serviceID);
+        Utils::Out::Out_Msg("初始化完成等待数据");
 
         // 读取数据
         boost::asio::async_read(sock, boost::asio::buffer(recv_node->GetBuf(), recv_node->GetTotalLen()),
@@ -175,14 +190,14 @@ namespace Net
                                 {
                                     if (ec)
                                     {
-                                        Utils::Out_Err(ec.what(), serviceID);
+                                        Utils::Out::Out_Err(ec.what());
                                         ActuallyClose();
                                         return;
                                     }
 
-                                    Utils::Out_Msg("收到数据！", serviceID);
+                                    Utils::Out::Out_Msg("收到数据！");
 
-                                    Utils::Out_Msg("解析数据并检查是否正确ing...", serviceID);
+                                    Utils::Out::Out_Msg("解析数据并检查是否正确ing...");
 
                                     // 读取的消息长度（4字节）
                                     uint32_t msg_len = 0;
@@ -201,23 +216,22 @@ namespace Net
                                     // 判断传入数据是否正确
                                     if (msg_len > MAX_LENGTH || msg_len <= 0)
                                     {
-                                        Utils::Out_Err("收到的消息的长度错误，请修复后重连", serviceID);
+                                        Utils::Out::Out_Err("收到的消息的长度错误，请修复后重连");
                                         Close();
                                         return;
                                     }
 
-                                    Utils::Out_Msg("解析完成！ID：" + std::to_string(msg_id) + "，长度：" +
-                                                       std::to_string(msg_len),
-                                                   serviceID);
+                                    Utils::Out::Out_Msg("解析完成！ID：" + std::to_string(msg_id) + "，长度：" +
+                                                        std::to_string(msg_len));
                                     if (!closing)
                                     {
-                                        Utils::Out_Net_Msg(msg_id, "准备读取具体消息", serviceID);
+                                        Utils::Out::Out_Net_Msg(msg_id, "准备读取具体消息");
                                         // 读取消息体
                                         ReadBody(msg_id, static_cast<int>(msg_len));
                                     }
                                     else
                                     {
-                                        Utils::Out_Msg("正处在关闭连接,拒绝接收新消息", serviceID);
+                                        Utils::Out::Out_Msg("正处在关闭连接,拒绝接收新消息");
                                         // 关闭连接
                                         ActuallyClose();
                                     }
@@ -227,22 +241,22 @@ namespace Net
     // 读取消息体
     void Connection::ReadBody(unsigned long long msg_id, int msg_len)
     {
-        Utils::Out_Msg("检查接收状态", serviceID);
+        Utils::Out::Out_Msg("检查接收状态");
         // 检查是否在关闭状态
         if (closing)
         {
-            Utils::Out_Err("收到消息，但是正在关闭连接，拒绝接收消息", serviceID);
+            Utils::Out::Out_Err("收到消息，但是正在关闭连接，拒绝接收消息");
             ActuallyClose();
             return;
         }
 
-        Utils::Out_Msg("接收状态正确，开始接收", serviceID);
+        Utils::Out::Out_Msg("接收状态正确，开始接收");
 
         // 保活
         auto self = shared_from_this();
 
         // 申请接收缓存
-        recv_node = std::make_shared<RecvNode>(msg_id, msg_len, serviceID);
+        recv_node = std::make_shared<RecvNode>(msg_id, msg_len);
         // 清理缓存
         recv_node->Clear();
 
@@ -253,13 +267,13 @@ namespace Net
                                     // 判断是否有异常
                                     if (ec)
                                     {
-                                        Utils::Out_Err("出现错误：" + ec.what(), serviceID);
+                                        Utils::Out::Out_Err("出现错误：" + ec.what());
                                         // 关闭连接
                                         ActuallyClose();
                                         return;
                                     }
 
-                                    Utils::Out_Msg("解析消息中", serviceID);
+                                    Utils::Out::Out_Msg("解析消息中");
 
                                     // 设置目标长度
                                     recv_node->SetCurLen(recv_node->GetTotalLen());
@@ -267,7 +281,7 @@ namespace Net
                                     // 消息装换为string类型
                                     std::string msg(recv_node->GetBuf(), recv_node->GetCurLen());
 
-                                    Utils::Out_Msg("解析完成，开始尝试将消息抛出", serviceID);
+                                    Utils::Out::Out_Msg("解析完成，开始尝试将消息抛出");
                                     // 尝试输出消息
                                     try
                                     {
@@ -276,13 +290,13 @@ namespace Net
                                     // 捕获异常
                                     catch (const std::exception& e)
                                     {
-                                        Utils::Out_Err(std::string("抛出异常: ") + e.what(), serviceID);
+                                        Utils::Out::Out_Err(std::string("抛出异常: ") + e.what());
                                         // 关闭连接
                                         Close();
                                     }
                                     catch (...)
                                     {
-                                        Utils::Out_Err("未知异常", serviceID);
+                                        Utils::Out::Out_Err("未知异常");
                                         Close();
                                     }
                                     // 如果现在socket连接并且不在关闭状态
@@ -294,6 +308,7 @@ namespace Net
                                 });
     }
 
+    // 发送函数（隐式生成消息ID）
     void Connection::ToSend(const std::string& msg)
     {
         // 原子自增，线程安全
@@ -313,7 +328,7 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        Utils::Out_Net_Msg(msg_id, "正在构建发送队列", serviceID);
+        Utils::Out::Out_Net_Msg(msg_id, "正在放入发送队列");
 
         // 获得其他线程的发送调用
         boost::asio::post(sock.get_executor(),
@@ -322,19 +337,19 @@ namespace Net
                               // 检查是否在关闭状态
                               if (closing)
                               {
-                                  Utils::Out_Err("准备发送消息，但是正在关闭连接，拒绝添加任务到发送队列", serviceID);
+                                  Utils::Out::Out_Err("准备发送消息，但是正在关闭连接，拒绝添加任务到发送队列");
                                   return;
                               }
                               // 判断传入消息是否过长
                               if (msg.size() > MAX_LENGTH || msg.size() <= 0)
                               {
-                                  Utils::Out_Err("传入消息的长度错误，请修复后重试", serviceID);
+                                  Utils::Out::Out_Err("传入消息的长度错误，请修复后重试");
                                   return;
                               }
 
                               // 构建发送任务
-                              auto send_node = std::make_shared<SendNode>(
-                                  msg_id, HEAD_LENGTH + static_cast<int>(msg.size()), serviceID);
+                              auto send_node =
+                                  std::make_shared<SendNode>(msg_id, HEAD_LENGTH + static_cast<int>(msg.size()));
                               // 获取消息缓存
                               char* buf = send_node->GetBuf();
 
@@ -357,7 +372,7 @@ namespace Net
                               send_queue.push_back(send_node);
                               if (!sending)
                               {
-                                  Utils::Out_Net_Msg(msg_id, "消息队列构任务建完成，进入消息队列等待发送", serviceID);
+                                  Utils::Out::Out_Net_Msg(msg_id, "消息队列构任务建完成，进入消息队列等待发送");
 
                                   // 启动发送队列
                                   DoSend();
@@ -368,7 +383,7 @@ namespace Net
     // 发送消息
     void Connection::DoSend()
     {
-        Utils::Out_Msg("正在检查发送条件", serviceID);
+        Utils::Out::Out_Msg("正在检查发送条件");
         // 判断是否有发送的消息
         if (send_queue.empty())
         {
@@ -382,7 +397,7 @@ namespace Net
             return;
         }
 
-        Utils::Out_Msg("检查完毕，准备发送", serviceID);
+        Utils::Out::Out_Msg("检查完毕，准备发送");
         // 更新发送状态变量
         sending = true;
         // 获取发送任务
@@ -390,7 +405,7 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        Utils::Out_Net_Msg(send_node->GetID(), "正在发送消息", serviceID);
+        Utils::Out::Out_Net_Msg(send_node->GetID(), "正在发送消息");
         // 异步发送
         boost::asio::async_write(sock, boost::asio::buffer(send_node->GetBuf(), send_node->GetCurLen()),
                                  [this, self, send_node](boost::system::error_code ec, std::size_t)
@@ -398,7 +413,7 @@ namespace Net
                                      // 判断是否有错误
                                      if (ec)
                                      {
-                                         Utils::Out_Err("发送错误，值为：" + ec.what(), serviceID);
+                                         Utils::Out::Out_Err("发送错误，值为：" + ec.what());
                                          sending = false;
                                          // 发送失败，直接关闭（丢弃剩余队列）
                                          send_queue.clear();
@@ -409,20 +424,20 @@ namespace Net
                                      // 弹出发送队列
                                      send_queue.pop_front();
 
-                                     Utils::Out_Msg("检查发送队列是否有发送任务", serviceID);
+                                     Utils::Out::Out_Msg("检查发送队列是否有发送任务");
                                      // 判断队列是否为空
                                      if (!send_queue.empty())
                                      {
-                                         Utils::Out_Msg("发送队列有发送任务，继续发送", serviceID);
+                                         Utils::Out::Out_Msg("发送队列有发送任务，继续发送");
                                          // 不为空，继续发送
                                          DoSend();
                                      }
                                      else
                                      {
-                                         Utils::Out_Msg("发送队列无发送任务", serviceID);
+                                         Utils::Out::Out_Msg("发送队列无发送任务");
                                          // 为空更新发送队列变量
                                          sending = false;
-                                         //
+                                         // 判断是否为关闭状态
                                          if (closing)
                                          {
                                              // 关闭连接

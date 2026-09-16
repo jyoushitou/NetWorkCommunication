@@ -253,6 +253,118 @@ for (size_t i = 0; i < 18; ++i) {
 }
 ```
 
+## 自定义业务模块指引
+
+本库只负责「消息怎么传」，不关心「消息传什么」。业务模块可以完全复用这套通讯架构，只需关注四件事：**服务 ID、业务处理函数、消息内容协议、Vue3 HTTP 路由**。
+
+### 1. 注册新的服务 ID（Message.h）
+
+每个业务服务分配一个唯一 ID（1~16 已占用，新业务从 17 开始扩展）：
+
+```cpp
+// connon/Message.h
+// 订单服务（服务器ID=17），负责订单业务
+constexpr int ServiceID_Order = 17;
+// 支付服务（服务器ID=18），负责支付业务
+constexpr int ServiceID_Pay = 18;
+// ... 继续扩展
+```
+
+> 服务 ID 同时用于日志标识（`Utils::Out_Msg(..., serviceID)`）和服务路由。
+
+### 2. 服务端业务处理（Server 的每个独立业务模块）
+
+每个业务服务 = 一份 `Server` 目录拷贝 + 修改 `ServiceID` + 在 `main.cpp` 的 `WaitForMessage()` 循环中编写业务逻辑：
+
+```cpp
+// Server/source/main.cpp —— 在 TODO 注释处编写你的业务处理逻辑
+while (true) {
+    auto [session, msg_id, msg] = server->WaitForMessage();
+    if (!session && msg == "close") break;   // Stop() 后返回终止标记
+
+    Utils::Out_Msg("收到客户端消息[id=" + std::to_string(msg_id) + "]: " + msg, ServiceID_);
+
+    // ===== 自定义业务逻辑开始 =====
+    // 方式一：按消息 ID 路由（推荐，msg_id 可作为业务命令字）
+    switch (msg_id) {
+        case 1001: {   // 1001 = 查询订单
+            std::string reply = HandleQueryOrder(msg);   // 你的业务函数
+            session->Reply(msg_id, reply);
+            break;
+        }
+        case 1002: {   // 1002 = 创建订单
+            std::string reply = HandleCreateOrder(msg);  // 你的业务函数
+            session->Reply(msg_id, reply);
+            break;
+        }
+        default:
+            session->Reply(msg_id, "未知命令，请检查消息 ID");
+            break;
+    }
+    // ===== 自定义业务逻辑结束 =====
+}
+```
+
+新业务模块的推荐步骤：
+
+1. 复制 `Server/` 目录为 `OrderService/`（或直接在仓库中新增子目录）；
+2. 修改 `main.cpp` 中创建 `Server` 时的 `ServiceID` 为你注册的新 ID；
+3. 在 `WaitForMessage()` 循环中扩展现有的 `switch` 分支；
+4. 若同时需要 HTTP 前端，调用 `RunHttpServer()` 而不是 `RunServer()`。
+
+### 3. 客户端接入（Client）
+
+客户端对每个业务服务建立一条连接，业务逻辑写在 `SetMessageCallback` 回调中（在 io 线程执行，注意回调中不要做阻塞操作）：
+
+```cpp
+// 创建订单服务客户端
+auto order_client = std::make_shared<Net::Client::Client>(io, ServiceID_Order);
+
+order_client->SetMessageCallback(
+    [](unsigned long long msg_id, std::string msg) {
+        std::cout << "[订单服务] 收到回复 ID=" << msg_id << " 内容=" << msg << std::endl;
+    });
+
+order_client->Connect("127.0.0.1", "60001");   // 订单服务端口
+
+// 发送带业务命令字的消息（显式指定消息 ID = 业务命令字）
+order_client->ToSend(1001, "查询订单: 20240001");
+```
+
+### 4. HTTP 业务扩展（Vue3 前端）
+
+`HttpServer::HandleVueRequest()` 是所有 Vue 请求的入口，在 `Server/source/body/NetHttpServer.cpp` 中扩展路由即可：
+
+```cpp
+// Server/source/body/NetHttpServer.cpp
+std::string HttpServer::HandleVueRequest(const std::string& path, const std::string& body)
+{
+    Utils::Out_Msg("[Vue请求] path=" + path + ", body=" + body, serviceID);
+
+    // ===== 自定义路由开始 =====
+    if (path == "/api/order/get") {
+        return "{\"code\":200, \"data\":{\"orderId\":\"20240001\"}}";
+    }
+    if (path == "/api/order/list") {
+        return "{\"code\":200, \"data\":[{\"orderId\":\"20240001\"}, {\"orderId\":\"20240002\"}]}";
+    }
+    // 其他路由...
+    // ===== 自定义路由结束 =====
+
+    return "{\"code\":404, \"msg\":\"route not found\"}";
+}
+```
+
+### 5. 消息 ID 使用约定（建议）
+
+| 场景                       | 消息 ID 用法                                        |
+| -------------------------- | --------------------------------------------------- |
+| 无需区分的简单透传         | 省略 ID，由 `g_net_msg_id` 原子自增                 |
+| 需要命令字区分业务         | `ToSend(1001, data)` 显式指定，服务端按 ID `switch` |
+| 需要追踪一条消息的完整链路 | 发送端记录分配的 ID，服务端用同一 ID 回复           |
+
+按上述步骤，新增一个业务服务只需改动「服务 ID + 处理逻辑」两处，网络收发、队列、线程模型、优雅退出完全复用。
+
 ## 设计说明
 
 1. **单线程事件循环**：所有 socket 读写都在 `io_context` 线程执行，业务线程通过 `WaitForMessage()` 阻塞消费消息，二者通过线程安全队列（`mutex` + `condition_variable`）解耦。

@@ -1,3 +1,11 @@
+/*
+ * @file        NetHttpServer.h
+ * @brief       HTTP 服务器与 HTTP 会话（用于 Vue 前端请求）
+ * @author      jyoushitou
+ * @date        2026-09-16
+ * @copyright   Copyright (c) 2026
+ */
+
 // NetHttpServer.h
 #pragma once
 
