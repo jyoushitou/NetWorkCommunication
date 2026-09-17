@@ -22,10 +22,9 @@ namespace Net
         /// @brief      构造函数（只有长度）
         /// @details    仅指定缓存长度，消息ID默认为无效值
         /// @param[in] max_len 缓存的最大长度
-        /// @param[in] serviceid 请求服务器id
         /// @warning    禁止传非正数
         /// @note
-        MsgNode(int max_len, int serviceid, int servicegoalid);
+        MsgNode(int max_len);
 
         /// @brief      构造函数（有消息ID和长度）
         /// @details    指定消息ID与缓存长度
@@ -33,7 +32,7 @@ namespace Net
         /// @param[in] max_len 缓存的最大长度
         /// @warning    禁止传非正数
         /// @note
-        MsgNode(unsigned long long msg_id_, int max_len, int serviceid, int servicegoalid);
+        MsgNode(unsigned long long msg_id_, int max_len);
 
         /// @brief      析构函数
         /// @details    释放消息体缓存
@@ -107,16 +106,6 @@ namespace Net
         /// @details    消息全局唯一ID
         /// @note
         unsigned long long msg_id;
-
-        /// @brief      服务器ID
-        /// @details    消息所属的服务器ID
-        /// @note
-        int serviceid;
-
-        /// @brief      目标服务器ID
-        /// @details    消息要发送到的目标服务器ID
-        /// @note
-        int servicegoalid;
     };
 
     /// @brief      接收节点
@@ -129,12 +118,12 @@ namespace Net
         /// @param[in] msg_id 消息全局唯一ID
         /// @param[in] max_len 缓存的最大长度
         /// @note
-        RecvNode(unsigned long long msg_id, int max_len, int serviceid, int servicegoalid);
+        RecvNode(unsigned long long msg_id, int max_len);
 
         /// @brief      构造函数（只有长度）
         /// @param[in] max_len 缓存的最大长度
         /// @note
-        RecvNode(int max_len, int serviceid, int servicegoalid);
+        RecvNode(int max_len);
 
     private:
     };
@@ -146,10 +135,10 @@ namespace Net
     {
     public:
         /// @brief      构造函数
-        /// @param[in] msg_id_ 消息全局唯一ID
+        /// @param[in] msg_id 消息全局唯一ID
         /// @param[in] max_len 缓存的最大长度
         /// @note
-        SendNode(unsigned long long msg_id, int max_len, int serviceid, int servicegoalid);
+        SendNode(unsigned long long msg_id, int max_len);
 
     private:
     };
@@ -207,15 +196,14 @@ namespace Net
         virtual void ToWork(unsigned long long msg_id, std::string msg);
 
         /// @brief      发送消息到发送队列
-        /// @details    把消息封装为发送任务并加入发送队列
+        /// @details    把消息封装为发送任务并加入发送队列，线程安全，可在外部线程调用
         /// @param[in] msg_id 消息全局唯一ID
         /// @param[in] msg 消息序列化字符串
-        /// @warning    线程安全，可在外部线程调用
         /// @note
         void Send(unsigned long long msg_id, std::string msg);
 
         /// @brief      关闭socket
-        /// @details    关闭socket并清理发送队列，IO线程内调用
+        /// @details    关闭socket并处理发送队列，IO线程内调用
         /// @warning    内部使用，禁止外部直接调用
         /// @note
         void ActuallyClose();
@@ -223,7 +211,7 @@ namespace Net
         /// @brief      存储socket
         /// @details    连接使用的TCP socket
         /// @note
-        boost::asio::ip::tcp::socket sock;
+        boost::asio::ip::tcp::socket socket;
 
     private:
         /// @brief      发送消息

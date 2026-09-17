@@ -11,6 +11,8 @@
 
 #include <boost/asio.hpp>
 
+extern int Service_ID;
+
 namespace Net
 {
     /// @brief      64位主机字节序转网络字节序
@@ -38,7 +40,7 @@ namespace Net
     /// @details    仅指定缓存长度，消息ID默认为无效值
     /// @param[in] max_len 缓存的最大长度
     /// @note
-    MsgNode::MsgNode(int max_len, int serviceid, int servicegoalid) : MsgNode(-1ULL, max_len, serviceid, servicegoalid)
+    MsgNode::MsgNode(int max_len) : MsgNode(-1ULL, max_len)
     {
     }
 
@@ -48,7 +50,7 @@ namespace Net
     /// @param[in] max_len 缓存的最大长度
     /// @warning    禁止传非正数，否则缓冲区申请失败
     /// @note
-    MsgNode::MsgNode(unsigned long long msg_id, int max_len, int serviceid, int servicegoalid)
+    MsgNode::MsgNode(unsigned long long msg_id, int max_len)
     {
         // 将buf指针置空
         buf = nullptr;
@@ -142,24 +144,22 @@ namespace Net
     /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] max_len 缓存的最大长度
     /// @note
-    RecvNode::RecvNode(unsigned long long msg_id, int max_len, int serviceid, int servicegoalid)
-        : MsgNode(msg_id, max_len, serviceid, servicegoalid)
+    RecvNode::RecvNode(unsigned long long msg_id, int max_len) : MsgNode(msg_id, max_len)
     {
     }
 
     /// @brief      构造函数（只有长度）
     /// @param[in] max_len 缓存的最大长度
     /// @note
-    RecvNode::RecvNode(int max_len, int serviceid, int servicegoalid) : MsgNode(max_len, serviceid, servicegoalid)
+    RecvNode::RecvNode(int max_len) : MsgNode(max_len)
     {
     }
 
     /// @brief      构造函数
-    /// @param[in] msg_id_ 消息全局唯一ID
+    /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] max_len 缓存的最大长度
     /// @note
-    SendNode::SendNode(unsigned long long msg_id, int max_len, int serviceid, int servicegoalid)
-        : MsgNode(msg_id, max_len, serviceid, servicegoalid)
+    SendNode::SendNode(unsigned long long msg_id, int max_len) : MsgNode(msg_id, max_len)
     {
     }
 
@@ -167,7 +167,7 @@ namespace Net
     /// @details    唯一的构造函数，初始化socket与内部状态
     /// @param[in] socket 连接的socket
     /// @note
-    Connection::Connection(boost::asio::ip::tcp::socket socket) : sock(std::move(socket))
+    Connection::Connection(boost::asio::ip::tcp::socket socket) : socket(std::move(socket))
     {
         // 发送状态
         // 初始化为false
@@ -188,24 +188,22 @@ namespace Net
     }
 
     /// @brief      关闭socket
-    /// @details    关闭socket并清理发送队列，触发一次关闭回调
+    /// @details    关闭socket并处理发送队列，触发一次关闭回调
     /// @warning    内部使用，禁止外部直接调用
     /// @note
     void Connection::ActuallyClose()
     {
         Utils::Out::Out_Msg("正在关闭socket");
 
-        // 错误码
+        // 关闭socket时查看错误码
         boost::system::error_code ec;
-        // 关闭socket
-        sock.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
-        sock.close(ec);
-
-        Utils::Out::Out_Msg("socket，正在清空队列完成");
+        socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+        socket.close(ec);
 
         // 判断是否有任务未发送
         if (!send_queue.empty())
         {
+            // 发送函数
             DoSend();
         }
 
@@ -231,7 +229,7 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        boost::asio::post(sock.get_executor(),
+        boost::asio::post(socket.get_executor(),
                           [this, self]()
                           {
                               // 已经标记过在关闭状态
@@ -243,6 +241,7 @@ namespace Net
                               closing = true;
 
                               // 判断是否发送完毕或者在发送状态
+                              // 是：则发送消息
                               if (!sending || !send_queue.empty())
                               {
                                   DoSend();
@@ -250,6 +249,7 @@ namespace Net
                               // 不在发送状态且没有消息，直接关闭Connection
                               else
                               {
+                                  // 启动关闭函数
                                   ActuallyClose();
                               }
                           });
@@ -266,13 +266,10 @@ namespace Net
 
         // 申请缓存
         recv_node = std::make_shared<RecvNode>(HEAD_LENGTH);
-        // 初始化缓存
         recv_node->Clear();
 
-        Utils::Out::Out_Msg("等待数据");
-
         // 读取数据
-        boost::asio::async_read(sock, boost::asio::buffer(recv_node->GetBuf(), recv_node->GetTotalLen()),
+        boost::asio::async_read(socket, boost::asio::buffer(recv_node->GetBuf(), recv_node->GetTotalLen()),
                                 [this, self](boost::system::error_code ec, std::size_t)
                                 {
                                     // 看看是否有错误
@@ -323,7 +320,7 @@ namespace Net
                                         ToSend(msg_id, "正在关闭！请稍后重试");
 
                                         // 关闭连接
-                                        Close();
+                                        ActuallyClose();
                                     }
                                 });
     }
@@ -344,8 +341,6 @@ namespace Net
             return;
         }
 
-        Utils::Out::Out_Msg("开始接收");
-
         // 保活
         auto self = shared_from_this();
 
@@ -356,7 +351,7 @@ namespace Net
         recv_node->Clear();
 
         // 接收消息
-        boost::asio::async_read(sock, boost::asio::buffer(recv_node->GetBuf(), recv_node->GetTotalLen()),
+        boost::asio::async_read(socket, boost::asio::buffer(recv_node->GetBuf(), recv_node->GetTotalLen()),
                                 [this, self, msg_id](boost::system::error_code ec, std::size_t)
                                 {
                                     // 判断是否有异常
@@ -375,6 +370,7 @@ namespace Net
                                     std::string msg(recv_node->GetBuf(), recv_node->GetCurLen());
 
                                     Utils::Out::Out_Msg("接收完成");
+
                                     // 尝试输出消息
                                     try
                                     {
@@ -393,7 +389,7 @@ namespace Net
                                         Close();
                                     }
                                     // 如果现在socket连接并且不在关闭状态
-                                    if (sock.is_open() && !closing)
+                                    if (socket.is_open() && !closing)
                                     {
                                         // 继续等待下次读取头文件
                                         ReadHead();
@@ -424,10 +420,8 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        Utils::Out::Out_Net_Msg(msg_id, "正在放入发送队列");
-
         // 获得其他线程的发送调用
-        boost::asio::post(sock.get_executor(),
+        boost::asio::post(socket.get_executor(),
                           [this, self, msg_id, msg = std::move(msg)]() mutable
                           {
                               // 检查是否在关闭状态
@@ -446,7 +440,8 @@ namespace Net
                               // 构建发送任务
                               auto send_node =
                                   std::make_shared<SendNode>(msg_id, HEAD_LENGTH + static_cast<int>(msg.size()));
-                              // 获取消息缓存
+
+                              // 获取消息缓存空间
                               char* buf = send_node->GetBuf();
 
                               // 转换字节序（长度用32位，ID用64位）
@@ -468,8 +463,6 @@ namespace Net
                               send_queue.push_back(send_node);
                               if (!sending)
                               {
-                                  Utils::Out::Out_Net_Msg(msg_id, "消息队列构任务建完成，进入消息队列等待发送");
-
                                   // 启动发送队列
                                   DoSend();
                               }
@@ -487,8 +480,8 @@ namespace Net
         {
             // 将发送状态变量更新
             sending = false;
-            // 队列发完且请求过关闭
-            if (closing)
+            // 队列发完且未请求过关闭
+            if (!closing)
             {
                 ActuallyClose();
             }
@@ -501,10 +494,10 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        Utils::Out::Out_Net_Msg(send_node->GetID(), "正在发送消息");
+        Utils::Out::Out_Net_Msg(send_node->GetID(), "发送消息");
 
         // 异步发送
-        boost::asio::async_write(sock, boost::asio::buffer(send_node->GetBuf(), send_node->GetCurLen()),
+        boost::asio::async_write(socket, boost::asio::buffer(send_node->GetBuf(), send_node->GetCurLen()),
                                  [this, self, send_node](boost::system::error_code ec, std::size_t)
                                  {
                                      // 判断是否有错误

@@ -95,20 +95,11 @@ namespace Net
     /// @details    消息头部中消息长度字段所占字节数
     /// @note
     constexpr short HEAD_LEN_LENGTH = 4;
-    /// @brief      请求服务器ID长度
-    /// @details    消息头部中请求服务器ID所占字节数
-    /// @note
-    constexpr short HEAD_SERVICEID = 2;
-
-    /// @brief      应答服务器ID长度
-    /// @details    消息头部中目标服务器ID所占字节数
-    /// @note
-    constexpr short HEAD_SERVICEGOALID = 2;
 
     /// @brief      消息头部长度
     /// @details    消息ID、消息长度、请求服务器ID与目标服务器ID长度之和
     /// @note
-    constexpr short HEAD_LENGTH = HEAD_ID_LENGTH + HEAD_LEN_LENGTH + HEAD_SERVICEID + HEAD_SERVICEGOALID;
+    constexpr short HEAD_LENGTH = HEAD_ID_LENGTH + HEAD_LEN_LENGTH;
 
     /// @brief      最大消息长度
     /// @details    单条消息允许的最大长度（1M）
