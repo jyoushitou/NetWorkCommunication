@@ -8,7 +8,6 @@
 #include <string>
 #include <deque>
 
-#include "Message.h"
 #include "Utils.h"
 
 namespace Net
@@ -195,17 +194,10 @@ namespace Net
         /// @note
         virtual void ToWork(unsigned long long msg_id, std::string msg);
 
-        /// @brief      发送消息到发送队列
-        /// @details    把消息封装为发送任务并加入发送队列，线程安全，可在外部线程调用
-        /// @param[in] msg_id 消息全局唯一ID
-        /// @param[in] msg 消息序列化字符串
-        /// @note
-        void Send(unsigned long long msg_id, std::string msg);
-
         /// @brief      关闭socket
         /// @details    关闭socket并处理发送队列，IO线程内调用
         /// @warning    内部使用，禁止外部直接调用
-        /// @note
+        /// @note       使用前一定要清空所有的发送
         void ActuallyClose();
 
         /// @brief      存储socket
@@ -214,6 +206,13 @@ namespace Net
         boost::asio::ip::tcp::socket socket;
 
     private:
+        /// @brief      发送消息到发送队列
+        /// @details    把消息封装为发送任务并加入发送队列，线程安全，可在外部线程调用
+        /// @param[in] msg_id 消息全局唯一ID
+        /// @param[in] msg 消息序列化字符串
+        /// @note
+        void Send(unsigned long long msg_id, std::string msg);
+
         /// @brief      发送消息
         /// @details    从发送队列取出任务并异步发送，IO线程内调用
         /// @note
@@ -255,5 +254,7 @@ namespace Net
         /// @details    防止 ActuallyClose 重复触发回调
         /// @note
         bool close_notified = false;
+
+        std::mutex SendingMutex;
     };
 } // namespace Net

@@ -11,6 +11,8 @@
 
 #include <boost/asio.hpp>
 
+#include "Message.h"
+
 extern int Service_ID;
 
 namespace Net
@@ -195,17 +197,17 @@ namespace Net
     {
         Utils::Out::Out_Msg("正在关闭socket");
 
+        if (!closing)
+        {
+            closing = true;
+        }
+
         // 关闭socket时查看错误码
         boost::system::error_code ec;
         socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         socket.close(ec);
 
-        // 判断是否有任务未发送
-        if (!send_queue.empty())
-        {
-            // 发送函数
-            DoSend();
-        }
+        send_queue.clear();
 
         // 防止多次通知关闭
         if (!close_notified)
@@ -242,15 +244,15 @@ namespace Net
 
                               // 判断是否发送完毕或者在发送状态
                               // 是：则发送消息
-                              if (!sending || !send_queue.empty())
+                              if (!sending && send_queue.empty())
                               {
-                                  DoSend();
+                                  // 启动关闭函数
+                                  ActuallyClose();
                               }
                               // 不在发送状态且没有消息，直接关闭Connection
                               else
                               {
-                                  // 启动关闭函数
-                                  ActuallyClose();
+                                  DoSend();
                               }
                           });
     }
@@ -316,9 +318,6 @@ namespace Net
                                     {
                                         Utils::Out::Out_Msg("正处在关闭连接,拒绝接收新消息");
 
-                                        // 返回关闭提醒
-                                        ToSend(msg_id, "正在关闭！请稍后重试");
-
                                         // 关闭连接
                                         ActuallyClose();
                                     }
@@ -359,7 +358,7 @@ namespace Net
                                     {
                                         Utils::Out::Out_Err("出现错误：" + ec.what() + "关闭连接");
                                         // 关闭连接
-                                        Close();
+                                        ActuallyClose();
                                         return;
                                     }
 
@@ -381,12 +380,12 @@ namespace Net
                                     {
                                         Utils::Out::Out_Err(std::string("抛出异常: ") + e.what());
                                         // 关闭连接
-                                        Close();
+                                        ActuallyClose();
                                     }
                                     catch (...)
                                     {
                                         Utils::Out::Out_Err("未知异常");
-                                        Close();
+                                        ActuallyClose();
                                     }
                                     // 如果现在socket连接并且不在关闭状态
                                     if (socket.is_open() && !closing)
@@ -401,10 +400,14 @@ namespace Net
     /// @details    外部发送函数，显式指定 msg_id，内部转调 Send
     /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] msg 消息序列化字符串
-    /// @warning    禁止传入空消息或超长消息
+    /// @warning    禁止传入空消息或超长消息，就会抛出异常
     /// @note
     void Connection::ToSend(unsigned long long msg_id, const std::string& msg)
     {
+        if (msg_id < 0 || msg.size() == 0 || msg.size() > MAX_LENGTH)
+        {
+            throw std::invalid_argument("msg_id非法或者要发送的消息错误");
+        }
         // 加入发送队列
         Send(msg_id, msg);
     }
@@ -417,7 +420,7 @@ namespace Net
     /// @note
     void Connection::Send(unsigned long long msg_id, std::string msg)
     {
-        // 保活
+        // 保活获取自身this指针
         auto self = shared_from_this();
 
         // 获得其他线程的发送调用
@@ -428,12 +431,6 @@ namespace Net
                               if (closing)
                               {
                                   Utils::Out::Out_Err("准备发送消息，但是正在关闭连接，拒绝添加任务到发送队列");
-                                  return;
-                              }
-                              // 判断传入消息是否过长
-                              if (msg.size() > MAX_LENGTH || msg.size() <= 0)
-                              {
-                                  Utils::Out::Out_Err("传入消息的长度错误，请修复后重试");
                                   return;
                               }
 
@@ -455,12 +452,16 @@ namespace Net
                               {
                                   std::memcpy(buf + HEAD_LENGTH, msg.data(), static_cast<int>(msg.size()));
                               }
+
                               // 设置发送长度
                               send_node->SetCurLen(HEAD_LENGTH + static_cast<int>(msg.size()));
+                              // 设置发送ID
                               send_node->SetID(msg_id);
 
                               // 外层 lambda 已在 IO 线程中执行，直接入队
                               send_queue.push_back(send_node);
+
+                              // 判断是否在发送状态，不是就启动发送，是则等待
                               if (!sending)
                               {
                                   // 启动发送队列
@@ -487,10 +488,13 @@ namespace Net
             }
             return;
         }
+
         // 更新发送状态变量
         sending = true;
+
         // 获取发送任务
         auto send_node = send_queue.front();
+
         // 保活
         auto self = shared_from_this();
 
@@ -505,8 +509,6 @@ namespace Net
                                      {
                                          Utils::Out::Out_Err("发送错误，值为：" + ec.what());
                                          sending = false;
-                                         // 发送失败，直接关闭（丢弃剩余队列）
-                                         send_queue.clear();
                                          ActuallyClose();
                                          return;
                                      }
