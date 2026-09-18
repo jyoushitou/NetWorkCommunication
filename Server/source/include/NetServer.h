@@ -15,6 +15,10 @@
 #include <tuple>
 #include <memory>
 
+#include <functional>
+
+#include <boost/asio.hpp>
+
 #include "NetConnection.h" //Server继承Conection
 
 /// @namespace  Net
@@ -29,6 +33,14 @@ namespace Net
     /// @note
     namespace Server
     {
+        /// @brief 消息回调类型
+        /// @param session 触发回调的会话智能指针
+        /// @param msg_id 消息全局唯一ID
+        /// @param msg 消息序列化字符串
+        /// @warning 禁止持有session裸指针，必须使用shared_ptr延长生命周期
+        /// @note 回调内部禁止长时间阻塞，会阻塞asio事件循环
+        using HandleFunction = std::function<void(const std::shared_ptr<Session>& session, unsigned long long msg_id,
+                                                  const std::string& msg)>;
 
         /// @brief      连接会话
         /// @details    tcp通讯的会话，负责与单个客户端收发数据
@@ -37,17 +49,6 @@ namespace Net
         class Session : public Connection
         {
         public:
-            /// @brief 消息推送回调类型
-            /// @param session 触发回调的会话智能指针
-            /// @param msg_id 消息全局唯一ID
-            /// @param msg 消息序列化字符串
-            /// @warning 禁止持有session裸指针，必须使用shared_ptr延长生命周期
-            /// @note 回调内部禁止长时间阻塞，会阻塞asio事件循环
-            using PushMessage = std::function<void(const std::shared_ptr<Session>& session, unsigned long long msg_id,
-                                                   const std::string& msg)>;
-
-            /// @brief 消息推送回调
-
             /// @brief      构造函数
             /// @details session的构造
             /// @param[in] io 连接的io_context
@@ -55,18 +56,14 @@ namespace Net
             /// @param[in] PMFunction 有消息的回调函数
             /// @warning
             /// @note
-            Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                    std::unique_ptr<PushMessage> PMFunction);
+            Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock, std::unique_ptr<HandleFunction> HF);
 
             /// @brief      安全获取自身智能指针
             /// @details    继承自 Connection，需从基类向下转换为 Session
             /// @return     指向本对象的 shared_ptr
             /// @warning    必须在本对象已被 shared_ptr 管理时调用
             /// @note
-            std::shared_ptr<Session> shared_from_this()
-            {
-                return std::static_pointer_cast<Session>(Connection::shared_from_this());
-            }
+            std::shared_ptr<Session> shared_from_this();
 
             /// @brief      回复消息
             /// @details    主线程调用，向该客户端回复一条消息
@@ -74,7 +71,7 @@ namespace Net
             /// @param[in] msg 消息序列化字符串
             /// @warning    禁止在回调或事件循环中长时间阻塞
             /// @note
-            void Reply(unsigned long long msg_id, std::string msg);
+            void Reply(unsigned long long msg_id, const std::string& msg);
 
             /// @brief      所属的 io_context
             /// @details    保存该会话使用的 io_context 引用
@@ -97,6 +94,8 @@ namespace Net
             std::atomic<bool> stop;
 
             /// @brief      最后更新时间
+            /// @details 记录最后更新的时间
+            time_t lastTime;
         };
 
         /// @brief      服务器端

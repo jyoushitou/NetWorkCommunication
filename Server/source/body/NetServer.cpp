@@ -12,12 +12,25 @@ namespace Net
 {
     namespace Server
     {
+
         //===Session===
         // 构造函数
         Session::Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                          std::unique_ptr<PushMessage> PMFunction)
-            : Connection(std::move(sock)), ioc(io), stop(false), PMFunc(std::move(PMFunction))
+            : Connection(std::move(sock)), ioc(io)
         {
+            // 初始化停止状态置为false
+            stop = false;
+        }
+
+        /// @brief      安全获取自身智能指针
+        /// @details    继承自 Connection，需从基类向下转换为 Session
+        /// @return     指向本对象的 shared_ptr
+        /// @warning    必须在本对象已被 shared_ptr 管理时调用
+        /// @note
+        std::shared_ptr<Session> Session::shared_from_this()
+        {
+            return std::static_pointer_cast<Session>(Connection::shared_from_this());
         }
 
         /// @brief      停止函数
@@ -32,8 +45,8 @@ namespace Net
             boost::asio::post(ioc,
                               [this, self]()
                               {
-                                  stop = true;
-                                  Close();
+                                  // stop = true;
+                                  // Close();
                               });
         }
 
@@ -47,16 +60,10 @@ namespace Net
         {
             // 输出收到的消息
             Utils::Out::Out_Net_Msg(msg_id, "收到客户端消息:" + msg);
-
-            // 把消息投递到服务器的队列，等待主线程处理
-            if (PMFunc != nullptr)
-            {
-                (*PMFunc)(shared_from_this(), msg_id, std::move(msg));
-            }
         }
 
         // 主线程调用：向该客户端回复一条消息
-        void Session::Reply(unsigned long long msg_id, std::string msg)
+        void Session::Reply(unsigned long long msg_id, const std::string& msg)
         {
             Utils::Out::Out_Msg("处理完成回复消息中");
             ToSend(msg_id, std::move(msg));
