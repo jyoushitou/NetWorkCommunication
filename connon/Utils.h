@@ -7,33 +7,12 @@
 // 防止重复包含
 #pragma once
 
-#include <iostream>
-#include <string>
-#include <sstream>
-#include <iomanip>
-#include <fstream>
-#include <iostream>
-#include <functional>
-#include <atomic>
-#include <mutex>
-#include <condition_variable>
-#include <vector>
-
 #include "Message.h"
 
-#include <thread>
-#include <sys/stat.h>
-
 #ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <winsock2.h>
+
 #include <windows.h>
-#include <direct.h>
-#else
-#include <csignal>
-#include <sys/types.h>
+
 #endif
 
 namespace Utils
@@ -49,12 +28,21 @@ namespace Utils
     /// @note
     namespace Time
     {
+        /// @brief 获得当前时间
+        /// @details 获得当前时间
+        unsigned long long NowTime();
+
+        /// @brief 计算时间差
+        /// @details 计算时间戳到当前的时间差
+        /// @param[in] oldtime 之前的时间戳
+        /// @return 返回计算出来的时间
+        unsigned long long Time(const time_t& oldtime);
 
         /// @brief      获取当前时间
         /// @details    返回当前时刻的格式化字符串
         /// @return     格式化后的时间字符串
         /// @note
-        std::string NowTime();
+        std::string NowTime_str();
 
         /// @brief      获取当前日期
         /// @details    返回当前日期的格式化字符串

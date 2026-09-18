@@ -91,16 +91,12 @@ namespace Net
             void ToWork(unsigned long long msg_id, std::string msg) override;
 
         private:
-            /// @brief 设置收到的回调
-            /// @details 设置工作函数的回调
-            /// @param[in] CBFunc
-            /// @note
-            void SetCBFunc(CBFunc);
-
             /// @brief      停止标志
             /// @details    标识该会话是否已停止
             /// @note
             std::atomic<bool> stop;
+
+            /// @brief      最后更新时间
         };
 
         /// @brief      服务器端

@@ -7,9 +7,32 @@
 // 头文件
 #include "Utils.h"
 
-// 时间头文件
-// Time namespace
+#include <iostream>
+#include <string>
+#include <sstream>
+#include <iomanip>
+#include <fstream>
+#include <iostream>
+#include <functional>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
+#include <vector>
+
 #include <ctime>
+#include <thread>
+#include <sys/stat.h>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <direct.h>
+#else
+#include <csignal>
+#include <sys/types.h>
+#endif
 
 namespace Utils
 {
@@ -43,15 +66,15 @@ namespace Utils
     /// @note
     namespace Time
     {
-
-        /// @brief      获取本地时间
+        /// @brief      获取本地时间戳
         /// @details    将时间戳转换为本地 std::tm 结构
         /// @param[out] local 输出的本地时间结构
         /// @param[in]  now   待转换的时间戳
-        /// @note       平台相关，Windows 使用 localtime_s
-        static void Get_Local(std::tm& local, time_t now)
+        /// @note       平台相关，Windows 使用 localtime_s，Linux/macOS 使用localtime_r
+        static void PushTimeToLocal(std::tm& local, time_t now)
         {
 #if _WIN32
+            // 按照Windows编码的获取
             localtime_s(&local, &now);
 #else
             // 按照Linux编码的获取
@@ -59,19 +82,58 @@ namespace Utils
 #endif
         }
 
+        /// @brief 获得Local本地时间戳
+        /// @details 创建后获得已经赋值过后的Local,now
+        static std::pair<std::tm, time_t> GetLocalNow()
+        {
+            // 现在的时间的时间戳获得
+            time_t now = std::time(nullptr);
+            std::tm local{};
+
+            // 获得local和now
+            PushTimeToLocal(local, now);
+
+            return std::pair<std::tm, time_t>{local, now};
+        }
+
+        /// @brief 获得当前时间
+        /// @details 获得当前时间
+        unsigned long long NowTime()
+        {
+            return GetLocalNow().second;
+        }
+
+        /// @brief 获得Local本地时间戳
+        /// @details 创建后获得已经赋值过后的Local
+        static std::tm GetLocal()
+        {
+            return GetLocalNow().first;
+        }
+
+        /// @brief 计算时间差
+        /// @details 计算时间戳到当前的时间差
+        /// @param[in] oldtime 之前的时间戳
+        /// @return 返回计算出来的时间
+        unsigned long long Time(const time_t& oldtime)
+        {
+            if (time < 0)
+            {
+                Utils::Out::Out_Msg("传入时间错误");
+            }
+
+            // 获得当前的时间
+            time_t now = NowTime();
+
+            return now - oldtime;
+        }
+
         /// @brief      获取当前时间
         /// @details    返回当前时刻的格式化字符串
         /// @return     格式化后的时间字符串
         /// @note
-        std::string NowTime()
+        std::string NowTime_str()
         {
-            // 现在的时间的时间戳
-            time_t now = std::time(nullptr);
-            std::tm local{};
-
-            // 获取时间
-            Get_Local(local, now);
-
+            std::tm local = GetLocal();
             std::ostringstream oss;
             oss << std::put_time(&local, "%Y-%m-%d %H:%M:%S");
             return oss.str();
@@ -84,11 +146,7 @@ namespace Utils
         std::string NowDay()
         {
             // 现在的时间的时间戳
-            auto now = std::time(nullptr);
-            std::tm local{};
-
-            // 获取时间
-            Get_Local(local, now);
+            std::tm local = GetLocal();
 
             // tm_year 从 1900 年开始算
             int year = local.tm_year + 1900;
@@ -311,7 +369,7 @@ namespace Utils
         /// @note
         void Out_Msg(const std::string msg)
         {
-            std::string Out_Str = "[" + ServiceID[serviceID] + "][INFO]" + Time::NowTime() + " " + msg;
+            std::string Out_Str = "[" + ServiceID[serviceID] + "][INFO]" + Time::NowTime_str() + " " + msg;
             std::cout << Out_Str << std::endl;
             File::Out_Log(Out_Str);
         }
@@ -322,7 +380,7 @@ namespace Utils
         /// @note
         void Out_Err(const std::string msg)
         {
-            std::string Out_Str = "[" + ServiceID[serviceID] + "][ERROR]" + Time::NowTime() + " " + msg;
+            std::string Out_Str = "[" + ServiceID[serviceID] + "][ERROR]" + Time::NowTime_str() + " " + msg;
             std::cerr << Out_Str << std::endl;
             File::Out_Log(Out_Str);
         }
