@@ -60,11 +60,11 @@ namespace Utils
 #endif
     }
 
-    /// @namespace  computeTime
+    /// @namespace  Time
     /// @brief      时间工具子模块
     /// @details    提供当前时间与日期的格式化获取
     /// @note
-    namespace computeTime
+    namespace Time
     {
         /// @brief      获取本地时间戳
         /// @details    将时间戳转换为本地 std::tm 结构
@@ -98,7 +98,7 @@ namespace Utils
 
         /// @brief 获得当前时间
         /// @details 获得当前时间
-        unsigned long long nowTime()
+        time_t nowTime()
         {
             return GetLocalNow().second;
         }
@@ -114,7 +114,7 @@ namespace Utils
         /// @details 计算时间戳到当前的时间差
         /// @param[in] oldtime 之前的时间戳
         /// @return 返回计算出来的时间
-        unsigned long long computeTime(const time_t& oldtime)
+        time_t computeTime(const time_t& oldtime)
         {
             if (time < 0)
             {
@@ -158,7 +158,7 @@ namespace Utils
             return std::to_string(year) + "-" + std::to_string(month) + "-" + std::to_string(day) + "-logs";
         }
 
-    } // namespace computeTime
+    } // namespace Time
 
     /// @namespace  Exit
     /// @brief      退出子模块
@@ -350,7 +350,7 @@ namespace Utils
             {
                 std::cerr << "创建logs失败" << std::endl;
             }
-            std::string addr = logsdir + "/" + computeTime::getNowDay() + ".txt";
+            std::string addr = logsdir + "/" + Time::getNowDay() + ".txt";
             if (File::outFileAdd(addr, msg))
                 std::cerr << "写入日志失败" << std::endl;
         }
@@ -369,7 +369,7 @@ namespace Utils
         /// @note
         void outMsg(const std::string msg)
         {
-            std::string Out_Str = "[" + ServiceID[serviceID] + "][INFO]" + computeTime::getNowtime() + " " + msg;
+            std::string Out_Str = "[" + ServiceID[serviceID] + "][INFO]" + Time::getNowtime() + " " + msg;
             std::cout << Out_Str << std::endl;
             File::outLog(Out_Str);
         }
@@ -380,7 +380,7 @@ namespace Utils
         /// @note
         void outErr(const std::string msg)
         {
-            std::string Out_Str = "[" + ServiceID[serviceID] + "][ERROR]" + computeTime::getNowtime() + " " + msg;
+            std::string Out_Str = "[" + ServiceID[serviceID] + "][ERROR]" + Time::getNowtime() + " " + msg;
             std::cerr << Out_Str << std::endl;
             File::outLog(Out_Str);
         }

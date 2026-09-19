@@ -22,21 +22,21 @@ namespace Utils
     /// @note
     extern int serviceID;
 
-    /// @namespace  computeTime
+    /// @namespace  Time
     /// @brief      时间工具子模块
     /// @details    提供当前时间与日期的格式化获取
     /// @note
-    namespace computeTime
+    namespace Time
     {
         /// @brief 获得当前时间
         /// @details 获得当前时间
-        unsigned long long nowTime();
+        time_t nowTime();
 
         /// @brief 计算时间差
         /// @details 计算时间戳到当前的时间差
         /// @param[in] oldtime 之前的时间戳
         /// @return 返回计算出来的时间
-        unsigned long long computeTime(const time_t& oldtime);
+        time_t computeTime(const time_t& oldtime);
 
         /// @brief      获取当前时间
         /// @details    返回当前时刻的格式化字符串
@@ -50,7 +50,7 @@ namespace Utils
         /// @note
         std::string getNowDay();
 
-    } // namespace computeTime
+    } // namespace Time
 
     /// @brief      初始化
     /// @details    初始化控制台，并注册退出相关的回调

@@ -89,6 +89,9 @@ namespace Net
             /// @note
             std::shared_ptr<HandleFunction> HF;
 
+            /// @brief 更新连接时间
+            void updateTime();
+
         private:
             /// @brief      停止标志
             /// @details    标识该会话是否已停止

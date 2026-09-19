@@ -8,6 +8,8 @@
 //
 #include "NetServer.h"
 
+#include "Utils.h"
+
 namespace Net
 {
     namespace Server
@@ -66,6 +68,13 @@ namespace Net
         {
             // 使用基类的关闭函数
             close();
+        }
+
+        /// @brief 更新连接时间
+
+        void Session::updateTime()
+        {
+            time_t lastTime = Utils::Time::nowTime();
         }
 
         //===Server===
