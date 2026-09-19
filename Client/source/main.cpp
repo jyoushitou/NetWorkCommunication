@@ -60,17 +60,17 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType)
 
 void Work(size_t idx, int serviceID, unsigned long long msg_id, const std::string& msg)
 {
-    Utils::Out_Net_Msg(msg_id, "线程" + std::to_string(idx) + "收到消息: " + msg, serviceID);
+    Utils::outNetMsg(msg_id, "线程" + std::to_string(idx) + "收到消息: " + msg, serviceID);
 }
 
-void Close(size_t idx, int serviceID)
+void close(size_t idx, int serviceID)
 {
-    Utils::Out_Msg("正在关闭:" + std::to_string(static_cast<int>(10 + idx)) + "线程", serviceID);
+    Utils::outMsg("正在关闭:" + std::to_string(static_cast<int>(10 + idx)) + "线程", serviceID);
 
     // 统计已关闭数（fetch_add 返回旧值，+1 得到新值）
     size_t closed = g_closed_conns.fetch_add(1) + 1;
     size_t remain = g_total_conns.load() - closed;
-    Utils::Out_Msg("当前剩余线程数，" + std::to_string(remain), serviceID);
+    Utils::outMsg("当前剩余线程数，" + std::to_string(remain), serviceID);
 
     // 全部关闭后唤醒主线程
     if (closed == g_total_conns.load())
@@ -84,7 +84,7 @@ void Close(size_t idx, int serviceID)
 
 void CreateConnection(size_t idx, int serviceID, const std::string& host, const std::string& port)
 {
-    Utils::Out_Msg("正在连接", serviceID);
+    Utils::outMsg("正在连接", serviceID);
 
     // 线程数统计自增
     g_total_conns.fetch_add(1);
@@ -103,7 +103,7 @@ void CreateConnection(size_t idx, int serviceID, const std::string& host, const 
                                      { Work(idx, serviceID, id, msg); });
 
     // 设置关闭回调
-    conn->client->SetCloseCallback([idx, serviceID]() { Close(idx, serviceID); });
+    conn->client->SetCloseCallback([idx, serviceID]() { close(idx, serviceID); });
 
     // 异步连接，先发起连接保证 io_context 中有任务
     conn->client->Connect(host, port);
@@ -131,14 +131,14 @@ int main()
     g_exit_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     if (!g_exit_event)
     {
-        Utils::Out_Err("创建退出事件失败", 1);
+        Utils::outErr("创建退出事件失败", 1);
         return 1;
     }
 
     // 2. 注册控制台信号处理（必须在创建连接之前）
     if (!SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE))
     {
-        Utils::Out_Err("注册控制台处理函数失败", 1);
+        Utils::outErr("注册控制台处理函数失败", 1);
         CloseHandle(g_exit_event);
         return 1;
     }
@@ -151,7 +151,7 @@ int main()
 
     CreateConnection(1, serviceID, "127.0.0.1", "60000");
 
-    Utils::Out_Msg("客户端运行中，按 Ctrl+C 退出", 1);
+    Utils::outMsg("客户端运行中，按 Ctrl+C 退出", 1);
 
     std::thread input_thread(
         []
@@ -161,7 +161,7 @@ int main()
             {
                 // 防御性检查：g_conns 在连接创建完成后才启动本线程，非空
                 if (!g_conns.empty())
-                    g_conns[0]->client->ToSend(str);
+                    g_conns[0]->client->toSend(str);
             }
         });
 
@@ -172,20 +172,20 @@ int main()
     input_thread.detach();
 
     // ===== 优雅关闭流程（现在回到主线程执行，安全） =====
-    Utils::Out_Msg("收到退出信号，正在关闭所有连接...", 1);
+    Utils::outMsg("收到退出信号，正在关闭所有连接...", 1);
 
     // 5. Stop 所有连接：内部 post 到各自 IO 线程，线程安全
     for (auto& conn : g_conns)
         conn->client->Stop();
 
     // 6. 等待所有 IO 线程结束
-    //    流程：Stop -> Close -> ActuallyClose -> OnClosed -> io 无任务 -> run() 返回
+    //    流程：Stop -> close -> actuallyClose -> OnClosed -> io 无任务 -> run() 返回
     for (auto& conn : g_conns)
         if (conn->io_thread.joinable())
             conn->io_thread.join();
 
     // 7. 清理
     CloseHandle(g_exit_event);
-    Utils::Out_Msg("客户端已退出", 1);
+    Utils::outMsg("客户端已退出", 1);
     return 0;
 }

@@ -34,12 +34,12 @@ std::atomic<bool> g_exit_flag{false};
 std::atomic<bool> g_stop_called{false};
 
 // 统一优雅退出逻辑（保证只执行一次）
-void GracefulShutdown()
+void gracefulShutdown()
 {
     bool expected = false;
     if (g_stop_called.compare_exchange_strong(expected, true))
     {
-        Utils::Out_Msg("收到退出信号，正在停止服务器...", 1);
+        Utils::outMsg("收到退出信号，正在停止服务器...", 1);
         g_exit_flag = true;
         if (g_server)
         {
@@ -51,7 +51,7 @@ void GracefulShutdown()
 // Ctrl+C / SIGTERM 处理函数
 void OnSignal(int)
 {
-    GracefulShutdown();
+    gracefulShutdown();
 }
 
 #ifdef _WIN32
@@ -65,7 +65,7 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType)
     case CTRL_CLOSE_EVENT:
     case CTRL_LOGOFF_EVENT:
     case CTRL_SHUTDOWN_EVENT:
-        GracefulShutdown();
+        gracefulShutdown();
         return TRUE;
     default:
         return FALSE;
@@ -76,7 +76,7 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType)
 // 服务器启动函数
 void RunServer(int port, int ServiceID_)
 {
-    Utils::Out_Msg("正在启动通讯端口", ServiceID_);
+    Utils::outMsg("正在启动通讯端口", ServiceID_);
 
     // 创建上下文
     boost::asio::io_context io;
@@ -90,7 +90,7 @@ void RunServer(int port, int ServiceID_)
     // 开始接收连接
     g_server->StartAccept();
 
-    Utils::Out_Msg("服务器启动，监听端口 " + std::to_string(port) + " ...等待连接中", ServiceID_);
+    Utils::outMsg("服务器启动，监听端口 " + std::to_string(port) + " ...等待连接中", ServiceID_);
 
     // 注册 Ctrl+C 处理
     std::signal(SIGINT, OnSignal);
@@ -111,17 +111,17 @@ void RunServer(int port, int ServiceID_)
         // 收到终止信号
         if (!session && msg == "close")
         {
-            Utils::Out_Msg("服务器正在退出...", ServiceID_);
+            Utils::outMsg("服务器正在退出...", ServiceID_);
             break;
         }
 
-        Utils::Out_Msg("收到客户端消息[id=" + std::to_string(msg_id) + "]: " + msg, ServiceID_);
+        Utils::outMsg("收到客户端消息[id=" + std::to_string(msg_id) + "]: " + msg, ServiceID_);
 
         // TODO: 在这里编写你的业务处理逻辑
-        // 处理完消息后，通过 session->Reply() 回复给客户端
+        // 处理完消息后，通过 session->reply() 回复给客户端
 
         // 示例：回显给客户端
-        session->Reply(msg_id, "服务器已收到！");
+        session->reply(msg_id, "服务器已收到！");
     }
 
     // 停止服务器（幂等，可安全重复调用）
@@ -134,9 +134,9 @@ void RunServer(int port, int ServiceID_)
 // 启动 HTTP 服务器的函数
 void RunHttpServer(int tcp_port, unsigned short http_port, int ServiceID_)
 {
-    Utils::Out_Msg("正在启动 HTTP 服务器（TCP端口=" + std::to_string(tcp_port) +
-                       ", HTTP端口=" + std::to_string(http_port) + "）",
-                   ServiceID_);
+    Utils::outMsg("正在启动 HTTP 服务器（TCP端口=" + std::to_string(tcp_port) +
+                      ", HTTP端口=" + std::to_string(http_port) + "）",
+                  ServiceID_);
 
     // 1. 创建 io_context
     boost::asio::io_context io;
@@ -154,7 +154,7 @@ void RunHttpServer(int tcp_port, unsigned short http_port, int ServiceID_)
     //
     // g_server->StartAccept();
 
-    Utils::Out_Msg("HTTP 服务器已启动，等待 Vue 前端请求...", ServiceID_);
+    Utils::outMsg("HTTP 服务器已启动，等待 Vue 前端请求...", ServiceID_);
 
     // 6. 注册退出信号
     std::signal(SIGINT, OnSignal);
@@ -184,7 +184,7 @@ int main()
 
     RunServer(60000, 1);
 
-    Utils::Out_Msg("服务器退出", 1);
+    Utils::outMsg("服务器退出", 1);
 
     return 0;
 }

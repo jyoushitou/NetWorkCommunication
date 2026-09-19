@@ -10,9 +10,9 @@ namespace Net
             //========== HttpSession ==========
 
             // 安全获取自身 shared_ptr（重载返回 HttpSession 类型，避免 protected 访问问题）
-            std::shared_ptr<HttpSession> HttpSession::shared_from_this()
+            std::shared_ptr<HttpSession> HttpSession::getSelfThis()
             {
-                return std::static_pointer_cast<HttpSession>(Session::shared_from_this());
+                return std::static_pointer_cast<HttpSession>(Session::getSelfThis());
             }
 
             HttpSession::HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock, int serviceID_,
@@ -22,18 +22,18 @@ namespace Net
             {
             }
 
-            void HttpSession::Start()
+            void HttpSession::start()
             {
                 // 异步读取 HTTP 请求头
                 boost::beast::http::async_read_header(
                     sock, buffer_, parser_,
-                    [self = shared_from_this()](boost::system::error_code ec, std::size_t) mutable
+                    [self = getSelfThis()](boost::system::error_code ec, std::size_t) mutable
                     {
                         // 检查读是否有错误
                         if (ec)
                         {
-                            Utils::Out_Msg("收到的消息的等待有错误，错误码：" + ec.what(), self->serviceID);
-                            self->ActuallyClose();
+                            Utils::outMsg("收到的消息的等待有错误，错误码：" + ec.what(), self->serviceID);
+                            self->actuallyClose();
                             return;
                         }
 
@@ -47,7 +47,7 @@ namespace Net
                         // 根据 Content-Length 判断是否有 body
                         if (req.body().size() > 0)
                         {
-                            self->ReadBody();
+                            self->readBody();
                         }
                         else
                         {
@@ -57,19 +57,19 @@ namespace Net
             }
 
             // 读取消息体
-            void HttpSession::ReadBody()
+            void HttpSession::readBody()
             {
                 // 继续读取剩余的 body
                 boost::beast::http::async_read(
                     sock, buffer_, parser_,
-                    [self = shared_from_this()](boost::system::error_code ec, std::size_t) mutable
+                    [self = getSelfThis()](boost::system::error_code ec, std::size_t) mutable
                     {
                         // 检查读是否有错误
                         if (ec)
                         {
-                            Utils::Out_Msg("读取消息有错误，错误码：" + ec.what(), self->serviceID);
+                            Utils::outMsg("读取消息有错误，错误码：" + ec.what(), self->serviceID);
                             // 出现错误，关闭连接
-                            self->ActuallyClose();
+                            self->actuallyClose();
                             return;
                         }
 
@@ -98,7 +98,7 @@ namespace Net
             void HttpSession::HttpSendResponse(const std::string& body)
             {
                 // 保活
-                auto self = shared_from_this();
+                auto self = getSelfThis();
 
                 // 创建一个状态码 200 的响应对象，`11` 表示 HTTP 版本 1.1
                 boost::beast::http::response<boost::beast::http::string_body> res{boost::beast::http::status::ok, 11};
@@ -121,13 +121,13 @@ namespace Net
                                                     // 判断是否有错误
                                                     if (ec)
                                                     {
-                                                        Utils::Out_Msg("发送消息有错误，错误码：" + ec.what(),
-                                                                       self->serviceID);
-                                                        ActuallyClose();
+                                                        Utils::outMsg("发送消息有错误，错误码：" + ec.what(),
+                                                                      self->serviceID);
+                                                        actuallyClose();
                                                         return;
                                                     }
                                                     // 简单处理：发送完关闭连接
-                                                    ActuallyClose();
+                                                    actuallyClose();
                                                 });
             }
 
@@ -163,7 +163,7 @@ namespace Net
             void HttpServer::StartHttpAccept()
             {
                 // 保活
-                auto self = shared_from_this();
+                auto self = getSelfThis();
 
                 // 创建连接socket
                 auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
@@ -175,14 +175,14 @@ namespace Net
                                                // 是否已经在运行状态
                                                if (!running)
                                                {
-                                                   Utils::Out_Msg("已经有连接的Session", serviceID);
+                                                   Utils::outMsg("已经有连接的Session", serviceID);
                                                    return;
                                                }
 
                                                if (!ec)
                                                {
 
-                                                   Utils::Out_Msg("开始创建连接", serviceID);
+                                                   Utils::outMsg("开始创建连接", serviceID);
 
                                                    // 创建 HTTP 会话
                                                    auto session = std::make_shared<HttpSession>(ioc, std::move(*sock),
@@ -192,14 +192,14 @@ namespace Net
                                                    http_sessions.push_back(session);
 
                                                    // 启动Session
-                                                   session->Start();
+                                                   session->start();
 
                                                    // 继续接收下一个连接
                                                    StartHttpAccept();
                                                }
                                                else
                                                {
-                                                   Utils::Out_Err("HTTP accept 错误: " + ec.what(), serviceID);
+                                                   Utils::outErr("HTTP accept 错误: " + ec.what(), serviceID);
                                                }
                                            });
             }
@@ -209,7 +209,7 @@ namespace Net
             {
                 // 先关掉 HTTP acceptor
                 boost::asio::post(ioc,
-                                  [this, self = shared_from_this()]()
+                                  [this, self = getSelfThis()]()
                                   {
                                       // 关闭 HTTP acceptor
                                       boost::system::error_code ec;
@@ -230,7 +230,7 @@ namespace Net
             // 回调函数
             std::string HttpServer::HandleVueRequest(const std::string& path, const std::string& body)
             {
-                Utils::Out_Msg("[Vue请求] path=" + path + ", body=" + body, serviceID);
+                Utils::outMsg("[Vue请求] path=" + path + ", body=" + body, serviceID);
 
                 // TODO: 在这里解析 JSON 并处理你的业务逻辑
                 // 例如：解析 body 中的 JSON，调用对应业务函数，返回 JSON 结果

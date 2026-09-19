@@ -22,7 +22,7 @@ namespace Net
             void Connect(const std::string&, const std::string&);
 
             // 启动
-            void Start() override;
+            void start() override;
 
             // 注册消息回调（收到一条消息，IO线程内被调用）
             void SetMessageCallback(std::function<void(unsigned long long, std::string)> cb);
@@ -35,10 +35,10 @@ namespace Net
 
         protected:
             // IO抛出收到的数据
-            void ToWork(unsigned long long, std::string) override;
+            void toWork(unsigned long long, std::string) override;
 
             // 回调关闭
-            void ToClosed() override;
+            void toClosed() override;
 
         private:
             // 保存io_context

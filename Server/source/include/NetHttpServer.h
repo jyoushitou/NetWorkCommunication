@@ -62,10 +62,10 @@ namespace Net
                             HttpServer* http_server);
 
                 // 安全获取自身 shared_ptr（重载返回 HttpSession 类型，避免 protected 访问问题）
-                std::shared_ptr<HttpSession> shared_from_this();
+                std::shared_ptr<HttpSession> getSelfThis();
 
                 // 重写 Start：不读二进制头，改为读 HTTP 请求
-                void Start() override;
+                void start() override;
 
                 // 发送 HTTP 响应给前端
                 void HttpSendResponse(const std::string& body);
@@ -75,7 +75,7 @@ namespace Net
 
             protected:
                 // 读取请求体
-                void ReadBody();
+                void readBody();
                 // 处理请求（解析 body 并回复）
                 void HandleRequest(const std::string& body);
 

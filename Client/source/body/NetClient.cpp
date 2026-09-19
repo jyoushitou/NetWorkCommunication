@@ -6,15 +6,15 @@ namespace Net
     {
 
         // 开始函数
-        void Client::Start()
+        void Client::start()
         {
             // 发出连接请求
-            ToSend("客户端发出连接，是否收到");
+            toSend("客户端发出连接，是否收到");
 
-            Utils::Out_Msg("客户端发出连接测试请求", serviceID);
+            Utils::outMsg("客户端发出连接测试请求", serviceID);
 
             // 等待回复
-            Connection::Start();
+            Connection::start();
         }
 
         // 构造函数
@@ -27,7 +27,7 @@ namespace Net
         void Client::Connect(const std::string& host, const std::string& port)
         {
             // 保活
-            auto self = shared_from_this();
+            auto self = getSelfThis();
 
             // 使用成员resolver（必须作为成员，保证异步解析期间resolver对象存活）
             resolver.async_resolve(host, port,
@@ -37,9 +37,9 @@ namespace Net
                                        // 如果有错误
                                        if (ec)
                                        {
-                                           Utils::Out_Err("解析地址失败: " + ec.what(), serviceID);
+                                           Utils::outErr("解析地址失败: " + ec.what(), serviceID);
                                            // 通知主线程退出，防止 WaitForMessage 永久阻塞
-                                           Close();
+                                           close();
                                            return;
                                        }
 
@@ -51,13 +51,13 @@ namespace Net
                                            {
                                                if (ec_conect)
                                                {
-                                                   Utils::Out_Err("连接失败: " + ec_conect.what(), serviceID);
-                                                   Close();
+                                                   Utils::outErr("连接失败: " + ec_conect.what(), serviceID);
+                                                   close();
                                                    return;
                                                }
 
-                                               Utils::Out_Msg(host + "连接成功", serviceID);
-                                               Start();
+                                               Utils::outMsg(host + "连接成功", serviceID);
+                                               start();
                                            });
                                    });
         }
@@ -75,7 +75,7 @@ namespace Net
         }
 
         // 给工作任务
-        void Client::ToWork(unsigned long long msg_id, std::string msg)
+        void Client::toWork(unsigned long long msg_id, std::string msg)
         {
             if (message_cb)
             {
@@ -84,7 +84,7 @@ namespace Net
         }
 
         // 连接彻底关闭，触发关闭回调
-        void Client::ToClosed()
+        void Client::toClosed()
         {
             if (close_cb)
                 close_cb();
@@ -93,8 +93,8 @@ namespace Net
         // Stop：从外部线程安全调用
         void Client::Stop()
         {
-            // 基类 Close() 内部 post 到 IO 线程，线程安全
-            Close();
+            // 基类 close() 内部 post 到 IO 线程，线程安全
+            close();
         }
 
     } // namespace Client

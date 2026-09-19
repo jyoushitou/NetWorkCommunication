@@ -12,42 +12,18 @@ namespace Net
 {
     namespace Server
     {
-
-        //===Session===
-        // 构造函数
+        /// @brief      连接会话
+        /// @details    tcp通讯的会话，负责与单个客户端收发数据
+        /// @warning    禁止持有裸指针，必须通过 shared_ptr 管理生命周期
+        /// @note
         Session::Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                         std::unique_ptr<PushMessage> PMFunction)
+                         std::shared_ptr<HandleFunction> HF)
             : Connection(std::move(sock)), ioc(io)
         {
             // 初始化停止状态置为false
             stop = false;
-        }
-
-        /// @brief      安全获取自身智能指针
-        /// @details    继承自 Connection，需从基类向下转换为 Session
-        /// @return     指向本对象的 shared_ptr
-        /// @warning    必须在本对象已被 shared_ptr 管理时调用
-        /// @note
-        std::shared_ptr<Session> Session::shared_from_this()
-        {
-            return std::static_pointer_cast<Session>(Connection::shared_from_this());
-        }
-
-        /// @brief      停止函数
-        /// @details    跨线程投递关闭操作到 io_context 线程并关闭连接
-        /// @warning
-        /// @note
-
-        void Server::Stop()
-        {
-            // 跨线程投递关闭操作到 io_context 线程
-            auto self = shared_from_this();
-            boost::asio::post(ioc,
-                              [this, self]()
-                              {
-                                  // stop = true;
-                                  // Close();
-                              });
+            // 给回调函数赋值
+            this->HF = HF;
         }
 
         /// @brief      工作函数（读取到消息后的业务处理）
@@ -56,17 +32,38 @@ namespace Net
         /// @param[in] msg 消息序列化字符串
         /// @warning
         /// @note
-        void Session::ToWork(unsigned long long msg_id, std::string msg)
+        void Session::toWork(unsigned long long msg_id, std::string msg)
         {
             // 输出收到的消息
-            Utils::Out::Out_Net_Msg(msg_id, "收到客户端消息:" + msg);
+            Utils::Out::outNetMsg(msg_id, "收到客户端消息:" + msg);
+
+            // 获得自身指针
+            auto self = shared_from_this();
+
+            // 存储回调函数数组
+            std::string sendmsg;
+
+            // 判断是否获得了回调函数指针
+            if (HF != nullptr)
+            {
+                sendmsg = (this->HF)(self, msg);
+            }
+
+            reply(msg_id, sendmsg);
         }
 
         // 主线程调用：向该客户端回复一条消息
-        void Session::Reply(unsigned long long msg_id, const std::string& msg)
+        void Session::reply(unsigned long long msg_id, const std::string& msg)
         {
-            Utils::Out::Out_Msg("处理完成回复消息中");
-            ToSend(msg_id, std::move(msg));
+
+            Utils::Out::outMsg("发送回复数据");
+            toSend(msg_id, std::move(msg));
+        }
+
+        /// @brief 关闭session
+        void Session::closeSession()
+        {
+            close();
         }
 
         //===Server===
@@ -103,13 +100,10 @@ namespace Net
 
                                       if (!ec)
                                       {
-                                          // 为每个连接创建一个 Session（传入 this 指针以便消息投递到 Server 队列）
-                                          auto session = std::make_shared<Session>(
-                                              ioc, std::move(*sock),
-                                              std::make_unique<PushMessage>(this->PushMessage()));
+                                          auto session = std::make_unique<Session>(ioc, sock, HF);
                                           sessions.push_back(session);
-                                          // 启动读（继承自 Connection::Start()）
-                                          session->Start();
+                                          // 启动读（继承自 Connection::start()）
+                                          session->start();
 
                                           // 继续接受下一个连接
                                           StartAccept();
@@ -117,7 +111,7 @@ namespace Net
                                       else
                                       {
                                           // 仅在服务器仍在运行时，才输出真正的 accept 错误
-                                          Utils::Out::Out_Err("accept 错误: " + ec.what());
+                                          Utils::Out::outErr("accept 错误: " + ec.what());
                                       }
                                   });
         }
@@ -127,12 +121,12 @@ namespace Net
         {
             {
                 // 加锁
-                std::lock_guard<std::mutex> lock(queue_mutex);
+                std::lock_guard<std::mutex> lock(queueMutex);
                 // 标记停止
                 running = false;
             }
             // 唤醒主线程，让它退出等待
-            queue_cv.notify_all();
+            queueCV.notify_all();
 
             // 保活
             auto self = shared_from_this();
@@ -160,32 +154,32 @@ namespace Net
         {
             {
                 // 加锁放入队列
-                std::lock_guard<std::mutex> lock(queue_mutex);
-                msg_queue.emplace(session, msg_id, std::move(msg));
+                std::lock_guard<std::mutex> lock(queueMutex);
+                msgQueue.emplace(session, msg_id, std::move(msg));
             }
             // 唤醒等待中的主线程
-            queue_cv.notify_one();
+            queueCV.notify_one();
         }
 
         // 主线程调用：阻塞等待一条消息
         std::tuple<std::shared_ptr<Session>, unsigned long long, std::string> Server::WaitForMessage()
         {
             // 加锁
-            std::unique_lock<std::mutex> lock(queue_mutex);
+            std::unique_lock<std::mutex> lock(queueMutex);
 
             // 等待队列非空或停止信号
-            queue_cv.wait(lock, [this]() { return !msg_queue.empty() || !running; });
+            queueCV.wait(lock, [this]() { return !msgQueue.empty() || !running; });
 
             // 如果是停止信号且队列为空，返回终止标记
-            if (msg_queue.empty())
+            if (msgQueue.empty())
             {
                 return {nullptr, -1ULL, "close"};
             }
 
             // 取出队首消息
-            auto msg = std::move(msg_queue.front());
+            auto msg = std::move(msgQueue.front());
             // 弹出队首消息
-            msg_queue.pop();
+            msgQueue.pop();
             return msg;
         }
 
@@ -193,9 +187,9 @@ namespace Net
         bool Server::HasMessage()
         {
             // 加锁
-            std::lock_guard<std::mutex> lock(queue_mutex);
+            std::lock_guard<std::mutex> lock(queueMutex);
             // 队列为空则返回false，有消息返回true
-            return !msg_queue.empty();
+            return !msgQueue.empty();
         }
     } // namespace Server
 } // namespace Net

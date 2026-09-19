@@ -41,38 +41,38 @@ namespace Net
         /// @brief      清空缓存
         /// @details    将缓存内容置零并复位读取位置
         /// @note
-        void Clear();
+        void clear();
 
         /// @brief      设置当前读取位置
         /// @param[in] len 当前读取到的位置
         /// @note
-        void SetCurLen(int len);
+        void setCurLen(int len);
 
         /// @brief      设置消息ID
         /// @param[in] msg_id_ 消息全局唯一ID
         /// @note
-        void SetID(unsigned long long msg_id_);
+        void setID(unsigned long long msg_id_);
 
         /// @brief      获取缓存区指针
         /// @return     指向缓冲区首地址的指针
         /// @warning    禁止释放或越界访问
         /// @note
-        char* GetBuf() const;
+        char* getBuf() const;
 
         /// @brief      获取当前读取位置
         /// @return     当前读取位置
         /// @note
-        int GetCurLen() const;
+        int getCurLen() const;
 
         /// @brief      获取缓存区总长度
         /// @return     缓冲区总长度
         /// @note
-        int GetTotalLen() const;
+        int getTotalLen() const;
 
         /// @brief      获取消息ID
         /// @return     消息全局唯一ID
         /// @note
-        unsigned long long GetID() const;
+        unsigned long long getID() const;
 
         /// @brief      禁用拷贝构造函数
         /// @details    消息体缓存独占资源，禁止拷贝
@@ -161,13 +161,13 @@ namespace Net
         /// @param[in] msg 消息序列化字符串
         /// @warning    禁止传入空消息或超长消息
         /// @note
-        void ToSend(unsigned long long msg_id, const std::string& msg);
+        void toSend(unsigned long long msg_id, const std::string& msg);
 
         /// @brief      开始函数
         /// @details    启动连接的异步读取流程
         /// @warning    须在socket连接建立后调用
         /// @note
-        virtual void Start();
+        virtual void start();
 
         /// @brief      析构函数
         /// @details    采用默认析构
@@ -179,66 +179,31 @@ namespace Net
         /// @details    向 IO 线程投递关闭请求，允许外部线程调用
         /// @warning    异步执行，调用后连接不再可用
         /// @note
-        void Close();
+        void close();
 
         /// @brief      连接关闭回调
         /// @details    连接真正关闭后的回调，由派生类重写，IO线程内触发
         /// @warning    禁止在此回调中长时间阻塞
         /// @note
-        virtual void ToClosed();
+        virtual void toClosed();
 
         /// @brief      业务处理函数
         /// @details    给业务逻辑层调用，派生类可重写
         /// @param[in] msg_id 消息全局唯一ID
         /// @param[in] msg 消息序列化字符串
         /// @note
-        virtual void ToWork(unsigned long long msg_id, std::string msg);
+        virtual void toWork(unsigned long long msg_id, std::string msg);
 
         /// @brief      关闭socket
         /// @details    关闭socket并处理发送队列，IO线程内调用
         /// @warning    内部使用，禁止外部直接调用
         /// @note       使用前一定要清空所有的发送
-        void ActuallyClose();
+        void actuallyClose();
 
         /// @brief      存储socket
         /// @details    连接使用的TCP socket
         /// @note
         boost::asio::ip::tcp::socket socket;
-
-    private:
-        /// @brief      发送消息到发送队列
-        /// @details    把消息封装为发送任务并加入发送队列，线程安全，可在外部线程调用
-        /// @param[in] msg_id 消息全局唯一ID
-        /// @param[in] msg 消息序列化字符串
-        /// @note
-        void Send(unsigned long long msg_id, std::string msg);
-
-        /// @brief      发送消息
-        /// @details    从发送队列取出任务并异步发送，IO线程内调用
-        /// @note
-        void DoSend();
-
-        /// @brief      读取头部
-        /// @details    异步读取消息头部（ID与长度）
-        /// @note
-        void ReadHead();
-
-        /// @brief      读取消息体
-        /// @details    异步读取消息体内容
-        /// @param[in] msg_id 消息全局唯一ID
-        /// @param[in] msg_len 消息体长度
-        /// @note
-        void ReadBody(unsigned long long msg_id, int msg_len);
-
-        /// @brief      读取缓存
-        /// @details    存储当前读取的接收节点
-        /// @note
-        std::shared_ptr<RecvNode> recv_node;
-
-        /// @brief      发送队列
-        /// @details    待发送任务的队列
-        /// @note
-        std::deque<std::shared_ptr<SendNode>> send_queue;
 
         /// @brief      发送状态
         /// @details    判断当前是否正在发送
@@ -251,10 +216,43 @@ namespace Net
         bool closing;
 
         /// @brief      关闭通知标记
-        /// @details    防止 ActuallyClose 重复触发回调
+        /// @details    防止 actuallyClose 重复触发回调
         /// @note
-        bool close_notified = false;
+        bool closeNotified = false;
 
-        std::mutex SendingMutex;
+    private:
+        /// @brief      发送消息到发送队列
+        /// @details    把消息封装为发送任务并加入发送队列，线程安全，可在外部线程调用
+        /// @param[in] msg_id 消息全局唯一ID
+        /// @param[in] msg 消息序列化字符串
+        /// @note
+        void send(unsigned long long msg_id, std::string msg);
+
+        /// @brief      发送消息
+        /// @details    从发送队列取出任务并异步发送，IO线程内调用
+        /// @note
+        void doSend();
+
+        /// @brief      读取头部
+        /// @details    异步读取消息头部（ID与长度）
+        /// @note
+        void readHead();
+
+        /// @brief      读取消息体
+        /// @details    异步读取消息体内容
+        /// @param[in] msg_id 消息全局唯一ID
+        /// @param[in] msg_len 消息体长度
+        /// @note
+        void readBody(unsigned long long msg_id, int msg_len);
+
+        /// @brief      读取缓存
+        /// @details    存储当前读取的接收节点
+        /// @note
+        std::shared_ptr<RecvNode> recvNode;
+
+        /// @brief      发送队列
+        /// @details    待发送任务的队列
+        /// @note
+        std::deque<std::shared_ptr<SendNode>> sendQueue;
     };
 } // namespace Net

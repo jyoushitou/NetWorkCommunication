@@ -22,35 +22,35 @@ namespace Utils
     /// @note
     extern int serviceID;
 
-    /// @namespace  Time
+    /// @namespace  computeTime
     /// @brief      时间工具子模块
     /// @details    提供当前时间与日期的格式化获取
     /// @note
-    namespace Time
+    namespace computeTime
     {
         /// @brief 获得当前时间
         /// @details 获得当前时间
-        unsigned long long NowTime();
+        unsigned long long nowTime();
 
         /// @brief 计算时间差
         /// @details 计算时间戳到当前的时间差
         /// @param[in] oldtime 之前的时间戳
         /// @return 返回计算出来的时间
-        unsigned long long Time(const time_t& oldtime);
+        unsigned long long computeTime(const time_t& oldtime);
 
         /// @brief      获取当前时间
         /// @details    返回当前时刻的格式化字符串
         /// @return     格式化后的时间字符串
         /// @note
-        std::string NowTime_str();
+        std::string getNowtime();
 
         /// @brief      获取当前日期
         /// @details    返回当前日期的格式化字符串
         /// @return     格式化后的日期字符串
         /// @note
-        std::string NowDay();
+        std::string getNowDay();
 
-    } // namespace Time
+    } // namespace computeTime
 
     /// @brief      初始化
     /// @details    初始化控制台，并注册退出相关的回调
@@ -80,7 +80,7 @@ namespace Utils
 
 #ifdef _WIN32
         /// @brief      退出事件
-        /// @details    统一退出事件：主线程 WaitExit() 阻塞等待
+        /// @details    统一退出事件：主线程 waitExit() 阻塞等待
         /// @note
         inline HANDLE exit_event = nullptr;
 
@@ -109,34 +109,34 @@ namespace Utils
         /// @details    注册退出时需要回调的停止服务函数
         /// @param[in] cb 停止服务的回调函数
         /// @note
-        void RegisterStopCallback(std::function<void()> cb);
+        void registerStopCallback(std::function<void()> cb);
 
         /// @brief      统一退出函数
         /// @details    执行优雅退出的完整流程
         /// @warning    应保证在退出过程中不被重复调用
         /// @note
-        void GracefulShutdown();
+        void gracefulShutdown();
 
         /// @brief      信号处理函数
         /// @details    按键/信号触发时的处理逻辑
         /// @param[in] sig 信号编号
         /// @note
-        void Onsignal(int sig);
+        void onsignal(int sig);
 
         /// @brief      清理资源
         /// @details    释放退出过程中占用的资源
         /// @note
-        void CleanUp();
+        void cleanUp();
 
         /// @brief      阻塞等待退出信号
         /// @details    阻塞当前线程直至收到退出信号
         /// @note
-        void WaitExit();
+        void waitExit();
 
         /// @brief      主动触发退出
         /// @details    由外部主动发起的退出请求
         /// @note
-        void RecviceExit();
+        void recviceExit();
     } // namespace Exit
 
     /// @namespace  File
@@ -155,13 +155,13 @@ namespace Utils
         /// @param[in] dir 日志目录路径
         /// @warning    须保证目录已存在或可创建
         /// @note
-        void SetLogsDir(const std::string dir);
+        void setLogsDir(const std::string dir);
 
         /// @brief      检查日志目录
         /// @details    检查是否有logs文件夹，没有则创建
         /// @return     目录可用返回 true，否则返回 false
         /// @note
-        bool CheckLogsDir();
+        bool checkLogsDir();
 
         /// @brief      追加写入文件
         /// @details    以追加方式向指定文件写入内容
@@ -169,20 +169,20 @@ namespace Utils
         /// @param[in] msg  待写入内容
         /// @return     写入成功返回 true，否则返回 false
         /// @note
-        bool Out_File_add(const std::string addr, const std::string msg);
+        bool outFileAdd(const std::string addr, const std::string msg);
         /// @brief      覆写文件
         /// @details    以覆盖方式向指定文件写入内容
         /// @param[in] addr 文件路径
         /// @param[in] msg  待写入内容
         /// @return     写入成功返回 true，否则返回 false
         /// @note
-        bool Out_File_wirte(const std::string addr, const std::string msg);
+        bool outFileWirte(const std::string addr, const std::string msg);
 
         /// @brief      写入日志
         /// @details    将消息写入日志文件
         /// @param[in] msg 日志内容
         /// @note
-        void Out_Log(const std::string msg);
+        void outLog(const std::string msg);
     } // namespace File
 
     /// @namespace  Out
@@ -195,12 +195,12 @@ namespace Utils
         /// @details    普通信息输出
         /// @param[in] msg 输出内容
         /// @note
-        void Out_Msg(const std::string msg);
+        void outMsg(const std::string msg);
         /// @brief      输出错误信息
         /// @details    错误信息输出
         /// @param[in] msg 输出内容
         /// @note
-        void Out_Err(const std::string msg);
+        void outErr(const std::string msg);
 
         /// @brief      网络输出
         /// @details    网络部分输出
@@ -208,7 +208,7 @@ namespace Utils
         /// @param[in] msg 消息内容
         /// @warning
         /// @note
-        void Out_Net_Msg(unsigned long long msg_id, std::string msg);
+        void outNetMsg(unsigned long long msg_id, std::string msg);
     } // namespace Out
 
     /// @namespace  String

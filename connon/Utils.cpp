@@ -53,18 +53,18 @@ namespace Utils
         SetConsoleCtrlHandler(Exit::ConsoleCtrlHandler, TRUE);
 #else
         // Linux/macOS：注册信号处理器，Ctrl+C 或 kill 时触发优雅退出
-        std::signal(SIGINT, Exit::Onsignal);
-        std::signal(SIGTERM, Exit::Onsignal);
+        std::signal(SIGINT, Exit::onsignal);
+        std::signal(SIGTERM, Exit::onsignal);
         // 可选：忽略 SIGPIPE 防止写入已关闭 socket 导致进程崩溃
         std::signal(SIGPIPE, SIG_IGN);
 #endif
     }
 
-    /// @namespace  Time
+    /// @namespace  computeTime
     /// @brief      时间工具子模块
     /// @details    提供当前时间与日期的格式化获取
     /// @note
-    namespace Time
+    namespace computeTime
     {
         /// @brief      获取本地时间戳
         /// @details    将时间戳转换为本地 std::tm 结构
@@ -98,7 +98,7 @@ namespace Utils
 
         /// @brief 获得当前时间
         /// @details 获得当前时间
-        unsigned long long NowTime()
+        unsigned long long nowTime()
         {
             return GetLocalNow().second;
         }
@@ -114,15 +114,15 @@ namespace Utils
         /// @details 计算时间戳到当前的时间差
         /// @param[in] oldtime 之前的时间戳
         /// @return 返回计算出来的时间
-        unsigned long long Time(const time_t& oldtime)
+        unsigned long long computeTime(const time_t& oldtime)
         {
             if (time < 0)
             {
-                Utils::Out::Out_Msg("传入时间错误");
+                Utils::Out::outMsg("传入时间错误");
             }
 
             // 获得当前的时间
-            time_t now = NowTime();
+            time_t now = nowTime();
 
             return now - oldtime;
         }
@@ -131,7 +131,7 @@ namespace Utils
         /// @details    返回当前时刻的格式化字符串
         /// @return     格式化后的时间字符串
         /// @note
-        std::string NowTime_str()
+        std::string getNowtime()
         {
             std::tm local = GetLocal();
             std::ostringstream oss;
@@ -143,7 +143,7 @@ namespace Utils
         /// @details    返回当前日期的格式化字符串（形如 yyyy-m-d-logs）
         /// @return     格式化后的日期字符串
         /// @note
-        std::string NowDay()
+        std::string getNowDay()
         {
             // 现在的时间的时间戳
             std::tm local = GetLocal();
@@ -158,7 +158,7 @@ namespace Utils
             return std::to_string(year) + "-" + std::to_string(month) + "-" + std::to_string(day) + "-logs";
         }
 
-    } // namespace Time
+    } // namespace computeTime
 
     /// @namespace  Exit
     /// @brief      退出子模块
@@ -179,7 +179,7 @@ namespace Utils
         /// @details    注册退出时需要回调的停止服务函数
         /// @param[in] cb 停止服务的回调函数
         /// @note
-        void RegisterStopCallback(std::function<void()> cb)
+        void registerStopCallback(std::function<void()> cb)
         {
             std::lock_guard<std::mutex> lock(callbacks_mutex);
             stop_callbacks.push_back(std::move(cb));
@@ -189,13 +189,13 @@ namespace Utils
         /// @details    执行优雅退出的完整流程
         /// @warning    应保证在退出过程中不被重复调用
         /// @note
-        void GracefulShutdown()
+        void gracefulShutdown()
         {
             bool expected = false;
 
             if (exit_called.compare_exchange_strong(expected, true))
             {
-                Out::Out_Msg("收到退出信号，正在停止服务器...");
+                Out::outMsg("收到退出信号，正在停止服务器...");
 
                 exit_flag = true;
 
@@ -221,7 +221,7 @@ namespace Utils
             }
 #else
             {
-                // Linux/macOS：通知 WaitExit() 返回
+                // Linux/macOS：通知 waitExit() 返回
                 std::lock_guard<std::mutex> lock(exit_mutex);
                 exit_signaled = true;
             }
@@ -232,7 +232,7 @@ namespace Utils
         /// @brief      阻塞等待退出信号
         /// @details    阻塞当前线程直至收到退出信号
         /// @note
-        void WaitExit()
+        void waitExit()
         {
 #ifdef _WIN32
             if (!exit_event)
@@ -247,18 +247,18 @@ namespace Utils
         /// @brief      主动触发退出
         /// @details    由外部主动发起的退出请求
         /// @note
-        void RecviceExit()
+        void recviceExit()
         {
-            GracefulShutdown();
+            gracefulShutdown();
         }
 
         /// @brief      信号处理函数
         /// @details    按键/信号触发时的处理逻辑
         /// @param[in] sig 信号编号（当前未使用）
         /// @note
-        void Onsignal(int sig)
+        void onsignal(int sig)
         {
-            GracefulShutdown();
+            gracefulShutdown();
         }
 
 #ifdef _WIN32
@@ -277,7 +277,7 @@ namespace Utils
             case CTRL_LOGOFF_EVENT:
             case CTRL_SHUTDOWN_EVENT:
                 running = false;
-                GracefulShutdown();
+                gracefulShutdown();
                 return TRUE;
             default:
                 return FALSE;
@@ -297,7 +297,7 @@ namespace Utils
         /// @param[in] dir 日志目录路径
         /// @warning    须保证目录已存在或可创建
         /// @note
-        void SetLogsDir(const std::string dir)
+        void setLogsDir(const std::string dir)
         {
             logsdir = dir;
         }
@@ -306,7 +306,7 @@ namespace Utils
         /// @details    检查是否有logs文件夹，没有则创建
         /// @return     目录可用返回 true，否则返回 false
         /// @note
-        bool CheckLogsDir()
+        bool checkLogsDir()
         {
 #ifdef _WIN32
             if (_mkdir(logsdir.c_str()) == 0)
@@ -325,7 +325,7 @@ namespace Utils
         /// @param[in] msg  待写入内容
         /// @return     写入成功返回 true，否则返回 false
         /// @note
-        bool Out_File_add(const std::string addr, const std::string msg)
+        bool outFileAdd(const std::string addr, const std::string msg)
         {
             // 默认打开模式是覆盖写
             std::ofstream out(addr.c_str(), std::ios::app);
@@ -343,15 +343,15 @@ namespace Utils
         /// @details    将消息写入日志文件
         /// @param[in] msg 日志内容
         /// @note
-        void Out_Log(const std::string msg)
+        void outLog(const std::string msg)
         {
             // 确认是否有这个文件夹
-            if (!CheckLogsDir())
+            if (!checkLogsDir())
             {
                 std::cerr << "创建logs失败" << std::endl;
             }
-            std::string addr = logsdir + "/" + Time::NowDay() + ".txt";
-            if (File::Out_File_add(addr, msg))
+            std::string addr = logsdir + "/" + computeTime::getNowDay() + ".txt";
+            if (File::outFileAdd(addr, msg))
                 std::cerr << "写入日志失败" << std::endl;
         }
     } // namespace File
@@ -367,22 +367,22 @@ namespace Utils
         /// @details    普通信息输出
         /// @param[in] msg 输出内容
         /// @note
-        void Out_Msg(const std::string msg)
+        void outMsg(const std::string msg)
         {
-            std::string Out_Str = "[" + ServiceID[serviceID] + "][INFO]" + Time::NowTime_str() + " " + msg;
+            std::string Out_Str = "[" + ServiceID[serviceID] + "][INFO]" + computeTime::getNowtime() + " " + msg;
             std::cout << Out_Str << std::endl;
-            File::Out_Log(Out_Str);
+            File::outLog(Out_Str);
         }
 
         /// @brief      输出错误信息
         /// @details    错误信息输出
         /// @param[in] msg 输出内容
         /// @note
-        void Out_Err(const std::string msg)
+        void outErr(const std::string msg)
         {
-            std::string Out_Str = "[" + ServiceID[serviceID] + "][ERROR]" + Time::NowTime_str() + " " + msg;
+            std::string Out_Str = "[" + ServiceID[serviceID] + "][ERROR]" + computeTime::getNowtime() + " " + msg;
             std::cerr << Out_Str << std::endl;
-            File::Out_Log(Out_Str);
+            File::outLog(Out_Str);
         }
 
         /// @brief      网络输出
@@ -391,9 +391,9 @@ namespace Utils
         /// @param[in] msg 消息内容
         /// @warning
         /// @note
-        void Out_Net_Msg(unsigned long long msg_id, std::string msg)
+        void outNetMsg(unsigned long long msg_id, std::string msg)
         {
-            Out_Msg("[信息ID:" + std::to_string(msg_id) + "]" + msg);
+            outMsg("[信息ID:" + std::to_string(msg_id) + "]" + msg);
         }
     } // namespace Out
 
