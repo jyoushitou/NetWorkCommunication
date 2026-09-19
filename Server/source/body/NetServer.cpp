@@ -117,7 +117,7 @@ namespace Net
                                       if (!ec)
                                       {
                                           auto session = std::make_unique<Session>(ioc, sock, HF);
-                                          sessions[0].push_back(session);
+                                          sessions.push_back(session);
                                           // 启动读（继承自 Connection::start()）
                                           session->start();
 
@@ -155,12 +155,9 @@ namespace Net
                                   acceptor.close(ec);
 
                                   // 循环通知每个会话关闭
-                                  for (auto it : sessions)
+                                  for (int i = 0; i < sessions.size(); i++)
                                   {
-                                      for (int i = 0; i < it.second.size(); i++)
-                                      {
-                                          it.second[i]->closeSession();
-                                      }
+                                      sessions[i]->closeSession();
                                   }
 
                                   // 清理会话

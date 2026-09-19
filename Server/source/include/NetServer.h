@@ -187,7 +187,7 @@ namespace Net
             /// @brief      会话列表
             /// @details    管理所有已建立的连接会话
             /// @note
-            std::unordered_map<int, std::vector<std::unique_ptr<Session>>> sessions;
+            std::vector<std::unique_ptr<Session>> sessions;
 
             /// @brief      消息队列
             /// @details    IO线程生产、主线程消费的消息队列
