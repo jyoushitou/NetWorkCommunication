@@ -32,14 +32,16 @@ namespace Net
     /// @note
     namespace Server
     {
+        class Session;
+
         /// @brief 消息回调类型
         /// @param session 触发回调的会话智能指针
         /// @param msg_id 消息全局唯一ID
         /// @param msg 消息序列化字符串
         /// @warning 禁止持有session裸指针，必须使用shared_ptr延长生命周期
         /// @note 回调内部禁止长时间阻塞，会阻塞asio事件循环
-        using HandleFunction = std::function<std::string(const std::shared_ptr<Session>& session,
-                                                         unsigned long long msg_id, const std::string& msg)>;
+        using HandleFunction =
+            std::function<std::string(const std::shared_ptr<Session>& session, const std::string& msg)>;
 
         /// @brief      连接会话
         /// @details    tcp通讯的会话，负责与单个客户端收发数据
@@ -71,7 +73,7 @@ namespace Net
             /// @param[in] msg 消息序列化字符串
             /// @warning    禁止在回调内部长时间阻塞，会阻塞asio事件循环
             /// @note
-            void toWork(unsigned long long msg_id, std::string msg) override;
+            void recvToWork(const unsigned long long msg_id, std::string msg) override;
 
             /// @brief 关闭函数
             /// @details 用于关闭session连接
@@ -87,6 +89,10 @@ namespace Net
             /// @details 用于更新时间，超时自动关闭连接，避免占线
             /// @note 在操作后记得调用此函数刷新时间
             void updateTime();
+
+            /// @brief 获取自身的指针
+            /// @details 获取可以用于向上转型的自身指针
+            std::shared_ptr<Session> getSession();
 
         private:
             /// @brief      停止标志

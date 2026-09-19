@@ -170,7 +170,7 @@ namespace Net
         /// @note
         virtual void start();
 
-        virtual void recvToWork() {};
+        virtual void recvToWork(const unsigned long long msg_id, std::string msg) {};
 
         /// @brief      析构函数
         /// @details    采用默认析构

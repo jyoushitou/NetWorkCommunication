@@ -215,9 +215,6 @@ namespace Net
         {
             // 通知设为真
             closeNotified = true;
-
-            // 回调函数
-            toClosed();
         }
     }
 
@@ -374,7 +371,7 @@ namespace Net
                                     // 尝试输出消息
                                     try
                                     {
-                                        toWork(msg_id, msg);
+                                        recvToWork(msg_id, msg);
                                     }
                                     // 捕获异常
                                     catch (const std::exception& e)

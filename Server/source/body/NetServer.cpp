@@ -34,13 +34,13 @@ namespace Net
         /// @param[in] msg 消息序列化字符串
         /// @warning
         /// @note
-        void Session::toWork(unsigned long long msg_id, std::string msg)
+        void Session::recvToWork(const unsigned long long msg_id, std::string msg)
         {
             // 输出收到的消息
             Utils::Out::outNetMsg(msg_id, "收到客户端消息:" + msg);
 
             // 获得自身指针
-            auto self = shared_from_this();
+            auto self = getSession();
 
             // 存储回调函数数组
             std::string sendmsg;
@@ -48,10 +48,15 @@ namespace Net
             // 判断是否获得了回调函数指针
             if (HF != nullptr)
             {
-                sendmsg = (this->HF)(self, msg);
+                sendmsg = (*HF)(self, msg);
             }
 
             reply(msg_id, sendmsg);
+        }
+
+        std::shared_ptr<Session> Session::getSession()
+        {
+            return std::static_pointer_cast<Session>(shared_from_this());
         }
 
         // 主线程调用：向该客户端回复一条消息
