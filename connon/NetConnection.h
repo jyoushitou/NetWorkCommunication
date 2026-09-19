@@ -142,9 +142,10 @@ namespace Net
     private:
     };
 
-    /// @brief      连接基类
+    /// @brief      连接基类(抽象类)
     /// @details    负责读取、发送数据的实现，派生类可重写业务逻辑
     /// @warning    禁止持有裸指针，必须通过 shared_ptr 管理生命周期
+    /// @warning    必须重写recvToWork(),
     /// @note
     class Connection : public std::enable_shared_from_this<Connection>
     {
@@ -170,7 +171,16 @@ namespace Net
         /// @note
         virtual void start();
 
-        virtual void recvToWork(const unsigned long long msg_id, std::string msg) {};
+        /// @brief 后期转到具体业务
+        /// @param msg_id 消息id
+        /// @param msg 消息体
+        /// @warning 必须重写
+        /// @note
+        virtual void recvToWork(const unsigned long long msg_id, std::string msg) = 0;
+
+        /// @brief 更新时间
+        /// @note 可以重写此函数实现时间的更新
+        virtual void updateTime() {};
 
         /// @brief      析构函数
         /// @details    采用默认析构

@@ -368,6 +368,9 @@ namespace Net
 
                                     Utils::Out::outMsg("接收完成");
 
+                                    // 更新函数
+                                    updateTime();
+
                                     // 尝试输出消息
                                     try
                                     {
@@ -458,6 +461,8 @@ namespace Net
 
                               // 外层 lambda 已在 IO 线程中执行，直接入队
                               sendQueue.push_back(send_node);
+
+                              updateTime();
 
                               // 判断是否在发送状态，不是就启动发送，是则等待
                               if (!sending)

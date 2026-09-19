@@ -14,6 +14,7 @@
 #include <tuple>
 #include <memory>
 
+#include <unordered_map>
 #include <functional>
 
 #include <boost/asio.hpp>
@@ -50,6 +51,9 @@ namespace Net
         class Session : public Connection
         {
         public:
+            /// @brief 定义发送函数
+            using PushMsg = std::function<void(const std::shared_ptr<Session>& session, unsigned long long msg_id,
+                                               const std::string& msg)>;
             /// @brief      构造函数
             /// @details session的构造
             /// @param[in] io 连接的io_context
@@ -146,7 +150,7 @@ namespace Net
             /// @return     存在待处理消息返回 true，否则返回 false
             /// @warning    仅做检查，不会取出消息
             /// @note
-            bool HasMessage();
+            bool HaveMessage();
 
             /// @brief      投递消息到队列
             /// @details    供 Session::toWork 调用，把消息投递到消息队列并唤醒主线程
@@ -183,7 +187,7 @@ namespace Net
             /// @brief      会话列表
             /// @details    管理所有已建立的连接会话
             /// @note
-            std::vector<std::unique_ptr<Session>> sessions;
+            std::unordered_map<int, std::vector<std::unique_ptr<Session>>> sessions;
 
             /// @brief      消息队列
             /// @details    IO线程生产、主线程消费的消息队列

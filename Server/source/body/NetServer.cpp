@@ -117,7 +117,7 @@ namespace Net
                                       if (!ec)
                                       {
                                           auto session = std::make_unique<Session>(ioc, sock, HF);
-                                          sessions.push_back(session);
+                                          sessions[0].push_back(session);
                                           // 启动读（继承自 Connection::start()）
                                           session->start();
 
@@ -155,10 +155,14 @@ namespace Net
                                   acceptor.close(ec);
 
                                   // 循环通知每个会话关闭
-                                  for (auto& session : sessions)
+                                  for (auto it : sessions)
                                   {
-                                      session->Stop();
+                                      for (int i = 0; i < it.second.size(); i++)
+                                      {
+                                          it.second[i]->closeSession();
+                                      }
                                   }
+
                                   // 清理会话
                                   sessions.clear();
                               });
@@ -199,13 +203,5 @@ namespace Net
             return msg;
         }
 
-        // 非阻塞检查
-        bool Server::HasMessage()
-        {
-            // 加锁
-            std::lock_guard<std::mutex> lock(queueMutex);
-            // 队列为空则返回false，有消息返回true
-            return !msgQueue.empty();
-        }
     } // namespace Server
 } // namespace Net
