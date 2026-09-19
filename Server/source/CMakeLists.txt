@@ -38,7 +38,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/body/NetServer.cpp
     ${COMMON_DIR}/NetConnection.cpp
     ${COMMON_DIR}/Utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/body/NetHttpServer.cpp
 )
 
 include_directories(

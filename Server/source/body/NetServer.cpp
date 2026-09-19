@@ -132,6 +132,17 @@ namespace Net
                                   });
         }
 
+        // 监控线程
+        void Server::clearSession()
+        {
+            // 获得自身指针
+            auto self = shared_from_this();
+            // post到io_context
+            boost::asio::post(ioc,[]{
+
+            });
+        }
+
         // 停止函数
         void Server::Stop()
         {
