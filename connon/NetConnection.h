@@ -170,6 +170,8 @@ namespace Net
         /// @note
         virtual void start();
 
+        virtual void recvToWork() {};
+
         /// @brief      析构函数
         /// @details    采用默认析构
         /// @note
@@ -181,19 +183,6 @@ namespace Net
         /// @warning    异步执行，调用后连接不再可用
         /// @note
         void close();
-
-        /// @brief      连接关闭回调
-        /// @details    连接真正关闭后的回调，由派生类重写，IO线程内触发
-        /// @warning    禁止在此回调中长时间阻塞
-        /// @note
-        virtual void toClosed();
-
-        /// @brief      业务处理函数
-        /// @details    给业务逻辑层调用，派生类可重写
-        /// @param[in] msg_id 消息全局唯一ID
-        /// @param[in] msg 消息序列化字符串
-        /// @note
-        virtual void toWork(unsigned long long msg_id, std::string msg);
 
         /// @brief      关闭socket
         /// @details    关闭socket并处理发送队列，IO线程内调用

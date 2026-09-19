@@ -537,21 +537,4 @@ namespace Net
                                      }
                                  });
     }
-
-    /// @brief      连接关闭回调
-    /// @details    基类默认空实现，派生类可按需重写
-    /// @note
-    void Connection::toClosed()
-    {
-    }
-
-    /// @brief      业务处理函数
-    /// @details    基类默认空实现，派生类可根据需要重写
-    /// @param[in] msg_id 消息全局唯一ID（未使用）
-    /// @param[in] msg 消息序列化字符串（未使用）
-    /// @note
-    void Connection::toWork(unsigned long long, std::string)
-    {
-        // 默认不处理任何业务逻辑
-    }
 } // namespace Net
