@@ -169,7 +169,8 @@ namespace Net
     /// @details    唯一的构造函数，初始化socket与内部状态
     /// @param[in] socket 连接的socket
     /// @note
-    Connection::Connection(boost::asio::ip::tcp::socket socket) : socket(std::move(socket))
+    Connection::Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io)
+        : socket(std::move(socket)), ioc(io)
     {
         // 发送状态
         // 初始化为false

@@ -78,18 +78,14 @@ namespace Net
             void closeSession();
 
         protected:
-            /// @brief      所属的 io_context
-            /// @details    保存该会话使用的 io_context 引用
-            /// @warning    生命周期须长于本会话
-            /// @note
-            boost::asio::io_context& ioc;
-
             /// @brief 回调函数
             /// @details 用于收到消息的具体消息处理
             /// @note
             std::shared_ptr<HandleFunction> HF;
 
             /// @brief 更新连接时间
+            /// @details 用于更新时间，超时自动关闭连接，避免占线
+            /// @note 在操作后记得调用此函数刷新时间
             void updateTime();
 
         private:
@@ -163,6 +159,11 @@ namespace Net
             /// @note
             boost::asio::io_context& ioc;
 
+            /// @brief      服务器运行状态
+            /// @details
+            /// @return true在运行，false不在运行状态
+            /// @warning    生命周期须长于本服务器
+            /// @note
             bool running();
 
         private:

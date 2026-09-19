@@ -152,8 +152,9 @@ namespace Net
         /// @brief      构造函数
         /// @details    唯一的构造函数
         /// @param[in] socket 连接的socket
+        /// @param[in] io 保存会话的io_context
         /// @note
-        explicit Connection(boost::asio::ip::tcp::socket socket);
+        explicit Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io);
 
         /// @brief      发送任务创建
         /// @details    显式指定 msg_id，用于日志追踪
@@ -219,6 +220,12 @@ namespace Net
         /// @details    防止 actuallyClose 重复触发回调
         /// @note
         bool closeNotified = false;
+
+        /// @brief      所属的 io_context
+        /// @details    保存该会话使用的 io_context 引用
+        /// @warning    生命周期须长于本会话
+        /// @note
+        boost::asio::io_context& ioc;
 
     private:
         /// @brief      发送消息到发送队列

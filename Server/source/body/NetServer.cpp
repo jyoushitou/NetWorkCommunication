@@ -20,7 +20,7 @@ namespace Net
         /// @note
         Session::Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                          std::shared_ptr<HandleFunction> HF)
-            : Connection(std::move(sock)), ioc(io)
+            : Connection(std::move(sock), io)
         {
             // 初始化停止状态置为false
             stop = false;
@@ -71,7 +71,7 @@ namespace Net
         }
 
         /// @brief 更新连接时间
-
+        /// @details 用于更新时间
         void Session::updateTime()
         {
             time_t lastTime = Utils::Time::nowTime();
