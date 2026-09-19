@@ -61,8 +61,10 @@ namespace Net
         }
 
         /// @brief 关闭session
+        /// @details 供sever关闭线程关闭
         void Session::closeSession()
         {
+            // 使用基类的关闭函数
             close();
         }
 

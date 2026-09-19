@@ -84,6 +84,11 @@ namespace Net
             /// @note
             boost::asio::io_context& ioc;
 
+            /// @brief 回调函数
+            /// @details 用于收到消息的具体消息处理
+            /// @note
+            std::shared_ptr<HandleFunction> HF;
+
         private:
             /// @brief      停止标志
             /// @details    标识该会话是否已停止
@@ -93,11 +98,6 @@ namespace Net
             /// @brief      最后更新时间
             /// @details 记录最后更新的时间
             time_t lastTime;
-
-            /// @brief 回调函数
-            /// @details 用于收到消息的具体消息处理
-            /// @note
-            std::shared_ptr<HandleFunction> HF;
         };
 
         /// @brief      服务器端
