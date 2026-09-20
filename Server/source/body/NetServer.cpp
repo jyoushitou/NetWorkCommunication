@@ -10,14 +10,18 @@
 
 #include "Utils.h"
 
+#include <algorithm>
+
 namespace Net
 {
     namespace Server
     {
-        /// @brief      连接会话
-        /// @details    tcp通讯的会话，负责与单个客户端收发数据
+        /// @brief      构造函数
+        /// @details    session的构造
+        /// @param[in] io 连接的io_context
+        /// @param[in] sock 连接的socket
+        /// @param[in] HF 消息回调函数
         /// @warning    禁止持有裸指针，必须通过 shared_ptr 管理生命周期
-        /// @note
         Session::Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                          std::shared_ptr<HandleFunction> HF)
             : Connection(std::move(sock), io)
@@ -28,12 +32,12 @@ namespace Net
             this->HF = HF;
         }
 
-        /// @brief      工作函数（读取到消息后的业务处理）
-        /// @details    输出消息并把消息投递到服务器的队列，等待主线程处理
+        /// @brief      业务处理
+        /// @details    收到消息后的具体业务实现，由基类回调触发：输出消息、
+        ///             调用回调函数并把响应回复给客户端
         /// @param[in] msg_id 消息全局唯一ID
         /// @param[in] msg 消息序列化字符串
-        /// @warning
-        /// @note
+        /// @warning    禁止在回调内部长时间阻塞，会阻塞asio事件循环
         void Session::recvToWork(const unsigned long long msg_id, std::string msg)
         {
             // 输出收到的消息
@@ -42,7 +46,7 @@ namespace Net
             // 获得自身指针
             auto self = getSession();
 
-            // 存储回调函数数组
+            // 存储回调函数返回的响应
             std::string sendmsg;
 
             // 判断是否获得了回调函数指针
@@ -50,16 +54,34 @@ namespace Net
             {
                 sendmsg = (*HF)(self, msg);
             }
+            else
+            {
+                Utils::Out::outErr("未设置消息回调函数，忽略本次消息");
+                return;
+            }
+
+            // 空消息会导致 toSend 抛出异常（toSend 禁止空串），这里直接跳过
+            if (sendmsg.empty())
+            {
+                Utils::Out::outMsg("回调返回空响应，跳过发送");
+                return;
+            }
 
             reply(msg_id, sendmsg);
         }
 
+        /// @brief      获取自身的指针
+        /// @details    获取可以用于向上转型的自身指针
         std::shared_ptr<Session> Session::getSession()
         {
             return std::static_pointer_cast<Session>(shared_from_this());
         }
 
-        // 主线程调用：向该客户端回复一条消息
+        /// @brief      回复消息
+        /// @details    主线程调用，向该客户端回复一条消息
+        /// @param[in] msg_id 消息全局唯一ID
+        /// @param[in] msg 消息序列化字符串
+        /// @warning    禁止在回调或事件循环中长时间阻塞
         void Session::reply(unsigned long long msg_id, const std::string& msg)
         {
 
@@ -67,22 +89,29 @@ namespace Net
             toSend(msg_id, std::move(msg));
         }
 
-        /// @brief 关闭session
-        /// @details 供sever关闭线程关闭
+        /// @brief      关闭函数
+        /// @details    用于关闭session连接，供服务器关闭线程调用
         void Session::closeSession()
         {
             // 使用基类的关闭函数
             close();
         }
 
-        /// @brief 更新连接时间
-        /// @details 用于更新时间
+        /// @brief      更新连接时间
+        /// @details    用于更新时间，超时自动关闭连接，避免占线
+        /// @note       在操作后记得调用此函数刷新时间
         void Session::updateTime()
         {
-            time_t lastTime = Utils::Time::nowTime();
+            // 更新成员变量 lastTime（不能写成局部变量，否则只是遮蔽，等于没更新）
+            lastTime = Utils::Time::nowTime();
         }
 
         //===Server===
+        /// @brief      构造函数
+        /// @details    服务器的构造，完成 acceptor 的 open / set_option / bind / listen
+        /// @param[in] io 服务器的io_context
+        /// @param[in] ep 监听的本地端点（地址与端口）
+        /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep)
             : ioc(io), acceptor(io), running(true)
         {
@@ -96,7 +125,10 @@ namespace Net
             acceptor.listen();
         }
 
-        // accept连接
+        /// @brief      开始接受连接
+        /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
+        ///             并为每个新连接创建对应的 Session
+        /// @warning    须在 io_context 运行后调用
         void Server::StartAccept()
         {
             // 保活 Server 自身
@@ -116,7 +148,9 @@ namespace Net
 
                                       if (!ec)
                                       {
-                                          auto session = std::make_unique<Session>(ioc, sock, HF);
+                                          // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
+                                          // 构造函数按值接收 socket，需 std::move(*sock)
+                                          auto session = std::make_shared<Session>(ioc, std::move(*sock), HF);
                                           sessions.push_back(session);
                                           // 启动读（继承自 Connection::start()）
                                           session->start();
@@ -132,18 +166,27 @@ namespace Net
                                   });
         }
 
-        // 监控线程
+        /// @brief      清理失效会话
+        /// @details    投递到 io_context 线程内，移除空指针会话（供监控线程调用）
         void Server::clearSession()
         {
-            // 获得自身指针
+            // 保活：post 的 lambda 必须捕获 self，否则 Server 可能在使用前被析构
             auto self = shared_from_this();
-            // post到io_context
-            boost::asio::post(ioc,[]{
-
-            });
+            // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 sessions）
+            boost::asio::post(ioc,
+                              [this, self]()
+                              {
+                                  // 移除空指针会话（已关闭的会话由各自 close 流程负责回收）
+                                  sessions.erase(std::remove_if(sessions.begin(), sessions.end(),
+                                                                [](const std::shared_ptr<Session>& s)
+                                                                { return s == nullptr; }),
+                                                 sessions.end());
+                              });
         }
 
-        // 停止函数
+        /// @brief      停止服务器
+        /// @details    停止接受新连接并关闭所有会话
+        /// @warning    调用后服务器不再接受新连接，须重新构造使用
         void Server::Stop()
         {
             {
@@ -165,8 +208,8 @@ namespace Net
                                   boost::system::error_code ec;
                                   acceptor.close(ec);
 
-                                  // 循环通知每个会话关闭
-                                  for (int i = 0; i < sessions.size(); i++)
+                                  // 循环通知每个会话关闭（用 size_t 避免有符号/无符号比较告警）
+                                  for (std::size_t i = 0; i < sessions.size(); ++i)
                                   {
                                       sessions[i]->closeSession();
                                   }
@@ -176,7 +219,12 @@ namespace Net
                               });
         }
 
-        // 投递消息到队列（IO线程调用）
+        /// @brief      投递消息到队列
+        /// @details    供 Session::recvToWork 调用，把消息投递到消息队列并唤醒主线程
+        /// @param[in] session 触发消息的会话智能指针
+        /// @param[in] msg_id 消息全局唯一ID
+        /// @param[in] msg 消息序列化字符串
+        /// @warning    须在 io_context 线程中调用
         void Server::PushMessage(const std::shared_ptr<Session>& session, unsigned long long msg_id,
                                  const std::string& msg)
         {
@@ -189,7 +237,10 @@ namespace Net
             queueCV.notify_one();
         }
 
-        // 主线程调用：阻塞等待一条消息
+        /// @brief      阻塞等待消息
+        /// @details    主线程调用，阻塞等待一条消息
+        /// @return     消息元组 {session, msg_id, 内容}
+        /// @warning    会阻塞调用线程直至有消息到达或服务器停止
         std::tuple<std::shared_ptr<Session>, unsigned long long, std::string> Server::WaitForMessage()
         {
             // 加锁
