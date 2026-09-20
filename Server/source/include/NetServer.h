@@ -10,11 +10,7 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
-#include <atomic>
-#include <tuple>
 #include <memory>
-
-#include <unordered_map>
 #include <functional>
 
 #include <boost/asio.hpp>
