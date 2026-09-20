@@ -7,6 +7,8 @@
 // 防止重复包含
 #pragma once
 
+#include <functional>
+
 #include "Message.h"
 
 #ifdef _WIN32

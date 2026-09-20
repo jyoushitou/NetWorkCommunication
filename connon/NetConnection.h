@@ -8,6 +8,8 @@
 #include <string>
 #include <deque>
 
+#include <boost/asio.hpp>
+
 #include "Utils.h"
 
 namespace Net

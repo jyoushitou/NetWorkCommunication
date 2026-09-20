@@ -36,6 +36,11 @@
 
 namespace Utils
 {
+    /// @brief      当前服务器ID
+    /// @details    存储本服务进程的全局唯一ID
+    /// @note       在 .cpp 中定义，头文件仅作 extern 声明
+    int serviceID = 0;
+
     /// @brief      初始化
     /// @details    初始化控制台，并注册退出相关的回调
     /// @warning    应在程序启动早期调用
@@ -413,6 +418,7 @@ namespace Utils
         /// @note
         std::vector<std::string> split(const std::string& str, const int& post, const char& c)
         {
+            return std::vector<std::string>{};
         }
     } // namespace String
 } // namespace Utils

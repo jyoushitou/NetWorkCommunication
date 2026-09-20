@@ -12,6 +12,8 @@
 #include <condition_variable>
 #include <memory>
 #include <functional>
+#include <atomic>
+#include <thread>
 
 #include <boost/asio.hpp>
 
@@ -49,7 +51,10 @@ namespace Net
             /// @param[in] io 连接的io_context
             /// @param[in] sock 连接的socket
             /// @param[in] HF 消息回调函数
-            Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock, std::shared_ptr<HandleFunction> HF);
+            /// @param[in] timeout 超时时间
+            /// @note 默认60s超时
+            Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock, std::shared_ptr<HandleFunction> HF,
+                    long long timeout);
 
             /// @brief      回复消息
             /// @details    主线程调用，向该客户端回复一条消息
@@ -68,6 +73,17 @@ namespace Net
             /// @brief      关闭函数
             /// @details    用于关闭session连接
             void closeSession();
+
+            /// @brief      是否已关闭
+            /// @details    判断连接是否已进入关闭流程或 socket 已断开
+            /// @return     已关闭返回 true，否则返回 false
+            /// @warning    仅在 IO 线程内调用，避免跨线程读取非原子状态
+            /// @note
+            bool isClosed();
+
+            /// @brief 判断是否超时
+            /// @return true超时，false未超时
+            bool timeOut();
 
         protected:
             /// @brief      更新连接时间
@@ -91,6 +107,9 @@ namespace Net
             /// @brief 最后更新时间
             /// @details 记录最后更新的时间
             time_t lastTime;
+
+            /// @brief 记录超时时间
+            long long timeout;
         };
 
         /// @brief      服务器端
@@ -107,6 +126,11 @@ namespace Net
             /// @warning    须保证 io 的生命周期长于本服务器
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF);
 
+            /// @brief      析构函数
+            /// @details    先停止服务器并回收清理线程，避免线程析构时未 join 触发 terminate
+            /// @note       派生类析构会自动调用基类析构
+            virtual ~Server();
+
             /// @brief      开始接受连接
             /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
             ///             并为每个新连接创建对应的 Session
@@ -122,20 +146,6 @@ namespace Net
             /// @details    主线程调用，阻塞等待一条消息
             /// @return     消息元组 {session, msg_id, 内容}
             std::tuple<std::shared_ptr<Session>, unsigned long long, std::string> WaitForMessage();
-
-            /// @brief      检查是否有消息
-            /// @details    主线程调用，非阻塞检查消息队列是否非空
-            /// @return     存在待处理消息返回 true，否则返回 false
-            bool HaveMessage();
-
-            /// @brief      投递消息到队列
-            /// @details    供 Session::recvToWork 调用，把消息投递到消息队列并唤醒主线程
-            /// @param[in] session 触发消息的会话智能指针
-            /// @param[in] msg_id 消息全局唯一ID
-            /// @param[in] msg 消息序列化字符串
-            /// @warning    须在 io_context 线程中调用
-            void PushMessage(const std::shared_ptr<Session>& session, unsigned long long msg_id,
-                             const std::string& msg);
 
         protected:
             /// @brief      所属的 io_context
@@ -173,6 +183,11 @@ namespace Net
             /// @details    定期清理失效会话的后台线程
             std::thread clearSessionThread;
 
+            /// @brief      自身弱引用
+            /// @details    供监控线程安全地判断 Server 是否仍存活并保活投递的任务
+            /// @note       在 StartAccept 中由 shared_from_this 赋值
+            std::weak_ptr<Server> selfWeak;
+
             /// @brief      运行状态标志
             /// @details    标识服务器当前是否正在运行
             std::atomic<bool> running;
@@ -180,6 +195,10 @@ namespace Net
             /// @brief 回调的函数
             /// @details 整个服务器session的函数存储
             std::shared_ptr<HandleFunction> HF;
+
+            /// @brief 超时时间
+            /// @details
+            long long timeOut;
         };
     } // namespace Server
 } // namespace Net
