@@ -1,6 +1,6 @@
 /*
  * @file        main.cpp
- * @brief       服务器入口（启动 TCP / HTTP 服务、处理退出信号）
+ * @brief       服务器入口（启动 TCP 服务、处理退出信号）
  * @author      jyoushitou
  * @date        2026-09-16
  * @copyright   Copyright (c) 2026
@@ -10,181 +10,70 @@
 #include "NetServer.h"
 #include "Utils.h"
 #include "Message.h"
-#include "NetHttpServer.h"
 
 #include <boost/asio.hpp>
 
 #include <memory>
 #include <thread>
-#include <iostream>
-#include <csignal>
-#include <atomic>
+#include <string>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
-// 全局服务器指针，供信号处理函数使用
-std::shared_ptr<Net::Server::Server> g_server;
-
-// 退出标志
-std::atomic<bool> g_exit_flag{false};
-
-// 防止 Stop() 被多次调用的标志
-std::atomic<bool> g_stop_called{false};
-
-// 统一优雅退出逻辑（保证只执行一次）
-void gracefulShutdown()
-{
-    bool expected = false;
-    if (g_stop_called.compare_exchange_strong(expected, true))
-    {
-        Utils::outMsg("收到退出信号，正在停止服务器...", 1);
-        g_exit_flag = true;
-        if (g_server)
-        {
-            g_server->Stop();
-        }
-    }
-}
-
-// Ctrl+C / SIGTERM 处理函数
-void OnSignal(int)
-{
-    gracefulShutdown();
-}
-
-#ifdef _WIN32
-// Windows 控制台关闭事件处理（taskkill、关闭窗口等）
-BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType)
-{
-    switch (ctrlType)
-    {
-    case CTRL_C_EVENT:
-    case CTRL_BREAK_EVENT:
-    case CTRL_CLOSE_EVENT:
-    case CTRL_LOGOFF_EVENT:
-    case CTRL_SHUTDOWN_EVENT:
-        gracefulShutdown();
-        return TRUE;
-    default:
-        return FALSE;
-    }
-}
-#endif
-
-// 服务器启动函数
-void RunServer(int port, int ServiceID_)
-{
-    Utils::outMsg("正在启动通讯端口", ServiceID_);
-
-    // 创建上下文
-    boost::asio::io_context io;
-
-    // 创建监听端点
-    boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), port);
-
-    // 创建服务器对象
-    g_server = std::make_shared<Net::Server::Server>(io, ep, ServiceID_);
-
-    // 开始接收连接
-    g_server->StartAccept();
-
-    Utils::outMsg("服务器启动，监听端口 " + std::to_string(port) + " ...等待连接中", ServiceID_);
-
-    // 注册 Ctrl+C 处理
-    std::signal(SIGINT, OnSignal);
-
-#ifdef _WIN32
-    // 注册 Windows 控制台事件处理（taskkill / 关闭窗口等也能优雅退出）
-    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-#endif
-
-    // 单独一个线程运行 io_context
-    std::thread io_thread([&io]() { io.run(); });
-
-    // 主线程循环：等待消息并处理，然后回复客户端
-    while (true)
-    {
-        auto [session, msg_id, msg] = g_server->WaitForMessage();
-
-        // 收到终止信号
-        if (!session && msg == "close")
-        {
-            Utils::outMsg("服务器正在退出...", ServiceID_);
-            break;
-        }
-
-        Utils::outMsg("收到客户端消息[id=" + std::to_string(msg_id) + "]: " + msg, ServiceID_);
-
-        // TODO: 在这里编写你的业务处理逻辑
-        // 处理完消息后，通过 session->reply() 回复给客户端
-
-        // 示例：回显给客户端
-        session->reply(msg_id, "服务器已收到！");
-    }
-
-    // 停止服务器（幂等，可安全重复调用）
-    g_server->Stop();
-
-    // 等待接收处理完
-    io_thread.join();
-}
-
-// 启动 HTTP 服务器的函数
-void RunHttpServer(int tcp_port, unsigned short http_port, int ServiceID_)
-{
-    Utils::outMsg("正在启动 HTTP 服务器（TCP端口=" + std::to_string(tcp_port) +
-                      ", HTTP端口=" + std::to_string(http_port) + "）",
-                  ServiceID_);
-
-    // 1. 创建 io_context
-    boost::asio::io_context io;
-
-    // 2. 创建 TCP 端点
-    boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), tcp_port);
-
-    // 3. 创建 HttpServer 实例
-    g_server = std::make_shared<Net::Server::HttpServer::HttpServer>(io, ep, ServiceID_, http_port);
-
-    // 4. 开始接收 HTTP 请求
-    std::dynamic_pointer_cast<Net::Server::HttpServer::HttpServer>(g_server)->StartHttpAccept();
-
-    // 5. （可选）如果还要接收 TCP 客户端，取消注释下面这行：
-    //
-    // g_server->StartAccept();
-
-    Utils::outMsg("HTTP 服务器已启动，等待 Vue 前端请求...", ServiceID_);
-
-    // 6. 注册退出信号
-    std::signal(SIGINT, OnSignal);
-#ifdef _WIN32
-    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-#endif
-
-    // 7. io_context 在独立线程运行
-    std::thread io_thread([&io]() { io.run(); });
-
-    // 8. 主线程等待退出标志
-    while (!g_exit_flag)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    // 9. 优雅退出
-    g_server->Stop();
-
-    // 10. 等待 io_context 线程结束
-    io_thread.join();
-}
+// 服务器监听端口
+constexpr int kListenPort = 60000;
 
 int main()
 {
+    // 设置当前服务ID（决定日志中的服务名）
+    Utils::serviceID = ServiceID_RPCGateway;
+
+    // 初始化控制台、日志目录、退出事件与信号处理（含 Ctrl+C / 关闭窗口）
     Utils::init();
 
-    RunServer(60000, 1);
+    Utils::Out::outMsg("正在启动通讯服务...");
 
-    Utils::outMsg("服务器退出", 1);
+    // 创建 io_context
+    boost::asio::io_context io;
+
+    // 创建监听端点
+    boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), kListenPort);
+
+    // 业务回调：在 IO 线程中执行，返回值作为回复内容发回客户端
+    auto handler = std::make_shared<Net::Server::HandleFunction>(
+        [](const std::shared_ptr<Net::Server::Session>&, const std::string& msg) -> std::string
+        {
+            Utils::Out::outMsg("收到客户端消息: " + msg);
+
+            // TODO: 在这里编写你的业务处理逻辑
+
+            // 返回给客户端的响应
+            return "服务器已收到！";
+        });
+
+    // 创建服务器对象
+    auto server = std::make_shared<Net::Server::Server>(io, ep, handler);
+
+    // 注册优雅退出回调：收到退出信号时停止服务器
+    Utils::Exit::registerStopCallback([server]() { server->Stop(); });
+
+    // 开始接收连接
+    server->StartAccept();
+
+    Utils::Out::outMsg("服务器启动，监听端口 " + std::to_string(kListenPort) + " ...等待连接中");
+
+    // io_context 在独立线程中运行
+    std::thread io_thread([&io]() { io.run(); });
+
+    // 主线程阻塞等待退出信号
+    Utils::Exit::waitExit();
+
+    Utils::Out::outMsg("服务器正在退出...");
+
+    // 停止服务器（幂等，可安全重复调用）
+    server->Stop();
+
+    // 等待 IO 线程结束
+    io_thread.join();
+
+    Utils::Out::outMsg("服务器退出");
 
     return 0;
 }

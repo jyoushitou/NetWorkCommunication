@@ -215,9 +215,6 @@ namespace Net
         {
             // 通知设为真
             closeNotified = true;
-
-            // 回调函数
-            toClosed();
         }
     }
 
@@ -371,10 +368,13 @@ namespace Net
 
                                     Utils::Out::outMsg("接收完成");
 
+                                    // 更新函数
+                                    updateTime();
+
                                     // 尝试输出消息
                                     try
                                     {
-                                        toWork(msg_id, msg);
+                                        recvToWork(msg_id, msg);
                                     }
                                     // 捕获异常
                                     catch (const std::exception& e)
@@ -462,6 +462,8 @@ namespace Net
                               // 外层 lambda 已在 IO 线程中执行，直接入队
                               sendQueue.push_back(send_node);
 
+                              updateTime();
+
                               // 判断是否在发送状态，不是就启动发送，是则等待
                               if (!sending)
                               {
@@ -536,22 +538,5 @@ namespace Net
                                          }
                                      }
                                  });
-    }
-
-    /// @brief      连接关闭回调
-    /// @details    基类默认空实现，派生类可按需重写
-    /// @note
-    void Connection::toClosed()
-    {
-    }
-
-    /// @brief      业务处理函数
-    /// @details    基类默认空实现，派生类可根据需要重写
-    /// @param[in] msg_id 消息全局唯一ID（未使用）
-    /// @param[in] msg 消息序列化字符串（未使用）
-    /// @note
-    void Connection::toWork(unsigned long long, std::string)
-    {
-        // 默认不处理任何业务逻辑
     }
 } // namespace Net

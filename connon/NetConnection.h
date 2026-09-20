@@ -8,6 +8,8 @@
 #include <string>
 #include <deque>
 
+#include <boost/asio.hpp>
+
 #include "Utils.h"
 
 namespace Net
@@ -142,9 +144,10 @@ namespace Net
     private:
     };
 
-    /// @brief      连接基类
+    /// @brief      连接基类(抽象类)
     /// @details    负责读取、发送数据的实现，派生类可重写业务逻辑
     /// @warning    禁止持有裸指针，必须通过 shared_ptr 管理生命周期
+    /// @warning    必须重写recvToWork(),
     /// @note
     class Connection : public std::enable_shared_from_this<Connection>
     {
@@ -170,6 +173,17 @@ namespace Net
         /// @note
         virtual void start();
 
+        /// @brief 后期转到具体业务
+        /// @param msg_id 消息id
+        /// @param msg 消息体
+        /// @warning 必须重写
+        /// @note
+        virtual void recvToWork(const unsigned long long msg_id, std::string msg) = 0;
+
+        /// @brief 更新时间
+        /// @note 可以重写此函数实现时间的更新
+        virtual void updateTime() {};
+
         /// @brief      析构函数
         /// @details    采用默认析构
         /// @note
@@ -181,19 +195,6 @@ namespace Net
         /// @warning    异步执行，调用后连接不再可用
         /// @note
         void close();
-
-        /// @brief      连接关闭回调
-        /// @details    连接真正关闭后的回调，由派生类重写，IO线程内触发
-        /// @warning    禁止在此回调中长时间阻塞
-        /// @note
-        virtual void toClosed();
-
-        /// @brief      业务处理函数
-        /// @details    给业务逻辑层调用，派生类可重写
-        /// @param[in] msg_id 消息全局唯一ID
-        /// @param[in] msg 消息序列化字符串
-        /// @note
-        virtual void toWork(unsigned long long msg_id, std::string msg);
 
         /// @brief      关闭socket
         /// @details    关闭socket并处理发送队列，IO线程内调用
