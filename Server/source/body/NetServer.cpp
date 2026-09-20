@@ -112,7 +112,8 @@ namespace Net
         /// @param[in] io 服务器的io_context
         /// @param[in] ep 监听的本地端点（地址与端口）
         /// @warning    须保证 io 的生命周期长于本服务器
-        Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep)
+        Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
+                       std::shared_ptr<HandleFunction> HF)
             : ioc(io), acceptor(io), running(true)
         {
             // 打开连接
@@ -123,6 +124,8 @@ namespace Net
             acceptor.bind(ep);
             // 监听
             acceptor.listen();
+            // 给智能指针赋值
+            this->HF = HF;
         }
 
         /// @brief      开始接受连接

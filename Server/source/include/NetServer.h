@@ -44,10 +44,6 @@ namespace Net
         class Session : public Connection
         {
         public:
-            /// @brief 定义发送函数
-            using PushMsg = std::function<void(const std::shared_ptr<Session>& session, unsigned long long msg_id,
-                                               const std::string& msg)>;
-
             /// @brief      构造函数
             /// @details    session的构造
             /// @param[in] io 连接的io_context
@@ -74,10 +70,6 @@ namespace Net
             void closeSession();
 
         protected:
-            /// @brief 回调函数
-            /// @details 用于收到消息的具体消息处理
-            std::shared_ptr<HandleFunction> HF;
-
             /// @brief      更新连接时间
             /// @details    用于更新时间，超时自动关闭连接，避免占线
             /// @note       在操作后记得调用此函数刷新时间
@@ -86,6 +78,10 @@ namespace Net
             /// @brief      获取自身的指针
             /// @details    获取可以用于向上转型的自身指针
             std::shared_ptr<Session> getSession();
+
+            /// @brief 回调函数
+            /// @details 用于收到消息的具体消息处理
+            std::shared_ptr<HandleFunction> HF;
 
         private:
             /// @brief 停止标志
@@ -109,7 +105,7 @@ namespace Net
             /// @param[in] io 服务器的io_context
             /// @param[in] ep 监听的本地端点（地址与端口）
             /// @warning    须保证 io 的生命周期长于本服务器
-            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep);
+            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF);
 
             /// @brief      开始接受连接
             /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
