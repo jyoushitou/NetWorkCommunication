@@ -16,7 +16,7 @@
 #include <string>
 
 // 服务器监听端口
-constexpr int kListenPort = 60000;
+constexpr int kListenPort = 26990;
 
 int main()
 {
