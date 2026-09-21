@@ -124,7 +124,8 @@ namespace Net
             /// @param[in] io 服务器的io_context
             /// @param[in] ep 监听的本地端点（地址与端口）
             /// @warning    须保证 io 的生命周期长于本服务器
-            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF);
+            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
+                   long long timeOut);
 
             /// @brief      析构函数
             /// @details    先停止服务器并回收清理线程，避免线程析构时未 join 触发 terminate

@@ -137,7 +137,7 @@ namespace Net
         /// @param[in] ep 监听的本地端点（地址与端口）
         /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF)
+                       std::shared_ptr<HandleFunction> HF, long long timeOut)
             : ioc(io), acceptor(io), running(true)
         {
             // 打开连接
@@ -150,6 +150,9 @@ namespace Net
             acceptor.listen();
             // 给智能指针赋值
             this->HF = HF;
+
+            // 设置超时时间
+            this->timeOut = timeOut;
 
             // 创建监控线程
             // clearSession 是非静态成员函数，必须显式绑定 this，否则 std::thread 无法推导可调用对象

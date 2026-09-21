@@ -215,6 +215,9 @@ namespace Net
         {
             // 通知设为真
             closeNotified = true;
+
+            // 回调派生类的关闭通知（仅触发一次）
+            toClosed();
         }
     }
 

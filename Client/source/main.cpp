@@ -11,10 +11,6 @@
 #include <atomic>
 #include <iostream>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
 struct ConnItem
 {
     std::unique_ptr<boost::asio::io_context> io;
@@ -23,73 +19,79 @@ struct ConnItem
 };
 
 // ============ 全局状态 ============
-// 储存18 条连接
+/// @brief      连接数组
+/// @details    储存所有连接，每条连接含独立 io_context、客户端与线程
+/// @warning    创建连接完成后才可访问，禁止在多线程中同时增删
+/// @note
 std::vector<std::shared_ptr<ConnItem>> g_conns;
-// 运行标志（回调线程只碰这个）
+/// @brief      运行标志
+/// @details    标记客户端是否运行中（回调线程只碰这个）
+/// @note
 std::atomic<bool> g_running{true};
-// 总连接数（CreateConnection 中递增）
+/// @brief      总连接数
+/// @details    记录创建的连接总数（CreateConnection 中递增）
+/// @note
 std::atomic<size_t> g_total_conns{0};
-// 已关闭连接数（OnClose 中递增）
+/// @brief      已关闭连接数
+/// @details    记录已关闭的连接数（OnClose 中递增）
+/// @note
 std::atomic<size_t> g_closed_conns{0};
-// 退出事件（主线程等待它）
-HANDLE g_exit_event = nullptr;
-
-// ============ Windows 控制台信号处理 ============
-
-BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType)
-{
-    switch (dwCtrlType)
-    {
-    case CTRL_C_EVENT:        // Ctrl+C
-    case CTRL_BREAK_EVENT:    // Ctrl+Break
-    case CTRL_CLOSE_EVENT:    // 用户点关闭窗口
-    case CTRL_SHUTDOWN_EVENT: // 系统关机
-    {
-        // 在 Windows 专用回调线程中执行：
-        // ⚠️ 只允许做这两件事，绝不打印日志、绝不调 Stop()（会内部 post，有线程安全问题风险）
-        g_running = false;
-        SetEvent(g_exit_event); // 唤醒主线程
-        return TRUE;            // 已处理，阻止进程被强杀
-    }
-    default:
-        return FALSE; // 其他信号交给系统默认
-    }
-}
 
 // ============ 业务回调（各自连接的 IO 线程中执行） ============
 
+/// @brief      消息处理
+/// @details    收到消息后在对应连接的 IO 线程中执行，打印日志
+/// @param[in] idx 连接下标
+/// @param[in] serviceID 服务ID，用于日志打印
+/// @param[in] msg_id 消息全局唯一ID
+/// @param[in] msg 消息体
+/// @warning    仅在 IO 线程内被调用，禁止长时间阻塞
+/// @note
 void Work(size_t idx, int serviceID, unsigned long long msg_id, const std::string& msg)
 {
-    Utils::outNetMsg(msg_id, "线程" + std::to_string(idx) + "收到消息: " + msg, serviceID);
+    Utils::Out::outNetMsg(msg_id, "线程" + std::to_string(idx) + "收到消息: " + msg);
 }
 
+/// @brief      关闭回调
+/// @details    连接彻底关闭后执行，统计已关闭数并在全部关闭后唤醒主线程
+/// @param[in] idx 连接下标
+/// @param[in] serviceID 服务ID，用于日志打印
+/// @warning    仅在 IO 线程内被调用，禁止长时间阻塞
+/// @note
 void close(size_t idx, int serviceID)
 {
-    Utils::outMsg("正在关闭:" + std::to_string(static_cast<int>(10 + idx)) + "线程", serviceID);
+    Utils::Out::outMsg("正在关闭:" + std::to_string(static_cast<int>(10 + idx)) + "线程");
 
-    // 统计已关闭数（fetch_add 返回旧值，+1 得到新值）
+    // 统计已关闭数：fetch_add 返回旧值，+1 得到新值
     size_t closed = g_closed_conns.fetch_add(1) + 1;
     size_t remain = g_total_conns.load() - closed;
-    Utils::outMsg("当前剩余线程数，" + std::to_string(remain), serviceID);
+    Utils::Out::outMsg("当前剩余线程数，" + std::to_string(remain));
 
-    // 全部关闭后唤醒主线程
+    // 全部关闭后，走 Utils 统一退出流程唤醒主线程
     if (closed == g_total_conns.load())
     {
-        g_running = false;
-        SetEvent(g_exit_event);
+        Utils::Exit::recviceExit();
     }
 }
 
 // ============ 创建连接 ============
 
+/// @brief      创建连接
+/// @details    创建专属 io_context、客户端与线程，注册回调并异步发起连接
+/// @param[in] idx 连接下标
+/// @param[in] serviceID 服务ID，用于日志打印
+/// @param[in] host 服务器地址
+/// @param[in] port 服务器端口
+/// @warning    须在 IO 线程启动前调用，禁止多线程并发调用
+/// @note
 void CreateConnection(size_t idx, int serviceID, const std::string& host, const std::string& port)
 {
-    Utils::outMsg("正在连接", serviceID);
+    Utils::Out::outMsg("正在连接");
 
-    // 线程数统计自增
+    // 总连接数统计自增
     g_total_conns.fetch_add(1);
 
-    // 创建io_context的线程指针
+    // 创建连接项（含 io_context、客户端与线程）
     auto conn = std::make_shared<ConnItem>();
 
     // 创建专属io_context
@@ -123,35 +125,39 @@ void CreateConnection(size_t idx, int serviceID, const std::string& host, const 
 
 int main()
 {
+    // 初始化控制台、日志目录、退出事件与信号处理（含 Ctrl+C / 关窗 / 系统关机）
     Utils::init();
 
-    int serviceID = 1;
+    int serviceID = ServiceID_RPCGateway;
+    // 让日志打印出正确的服务名（Utils::Out 内部使用 serviceID）
+    Utils::serviceID = serviceID;
 
-    // 1. 创建自动复位事件（初始无信号）
-    g_exit_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-    if (!g_exit_event)
-    {
-        Utils::outErr("创建退出事件失败", 1);
-        return 1;
-    }
+    // 注册优雅退出回调：收到退出信号时关闭所有连接。
+    // ⚠️ 本回调在系统信号线程内执行，只做线程安全的 Stop()，绝不做 join/阻塞等待
+    Utils::Exit::registerStopCallback(
+        []()
+        {
+            g_running = false;
+            for (auto& conn : g_conns)
+            {
+                if (conn->client)
+                    conn->client->Stop();
+            }
+        });
 
-    // 2. 注册控制台信号处理（必须在创建连接之前）
-    if (!SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE))
-    {
-        Utils::outErr("注册控制台处理函数失败", 1);
-        CloseHandle(g_exit_event);
-        return 1;
-    }
-
-    // // 3. 创建 18 条内网连接（地址按实际填）
+    // // 创建 18 条内网连接（地址按实际填）
     // for (size_t i = 0; i < 18; ++i)
     // {
-    //     CreateConnection(i, "127.0.0.1", "60000");
+    //     CreateConnection(i, serviceID, "127.0.0.1", "60000");
     // }
 
-    CreateConnection(1, serviceID, "127.0.0.1", "60000");
+    Utils::Out::outMsg("输入网址");
+    std::string ipv4 = "";
+    std::cin >> ipv4;
 
-    Utils::outMsg("客户端运行中，按 Ctrl+C 退出", 1);
+    CreateConnection(1, serviceID, ipv4, "26990");
+
+    Utils::Out::outMsg("客户端运行中，按 Ctrl+C 退出");
 
     std::thread input_thread(
         []
@@ -160,32 +166,25 @@ int main()
             while (g_running && std::cin >> str)
             {
                 // 防御性检查：g_conns 在连接创建完成后才启动本线程，非空
-                if (!g_conns.empty())
-                    g_conns[0]->client->toSend(str);
+                if (!g_conns.empty() && g_conns[0]->client)
+                    g_conns[0]->client->toSend(0, str);
             }
         });
 
-    // 4. 主线程完全挂起，等待退出事件被 SetEvent
-    //    ⚠️ 此时不占任何 CPU，这是事件对象比 sleep 轮询的绝对优势
-    WaitForSingleObject(g_exit_event, INFINITE);
+    // 阻塞等待退出信号（由 Utils::Exit 统一处理 Ctrl+C / 关窗 / 全部连接关闭）
+    Utils::Exit::waitExit();
 
     input_thread.detach();
 
-    // ===== 优雅关闭流程（现在回到主线程执行，安全） =====
-    Utils::outMsg("收到退出信号，正在关闭所有连接...", 1);
+    // ===== 优雅关闭流程（回到主线程执行，安全） =====
+    Utils::Out::outMsg("收到退出信号，正在关闭所有连接...");
 
-    // 5. Stop 所有连接：内部 post 到各自 IO 线程，线程安全
-    for (auto& conn : g_conns)
-        conn->client->Stop();
-
-    // 6. 等待所有 IO 线程结束
-    //    流程：Stop -> close -> actuallyClose -> OnClosed -> io 无任务 -> run() 返回
+    // Stop 已在退出回调中投递，这里只需等待所有 IO 线程结束
+    // 流程：Stop -> close -> actuallyClose -> toClosed -> io 无任务 -> run() 返回
     for (auto& conn : g_conns)
         if (conn->io_thread.joinable())
             conn->io_thread.join();
 
-    // 7. 清理
-    CloseHandle(g_exit_event);
-    Utils::outMsg("客户端已退出", 1);
+    Utils::Out::outMsg("客户端已退出");
     return 0;
 }

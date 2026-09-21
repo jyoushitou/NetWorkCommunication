@@ -18,7 +18,7 @@
 #include <string>
 
 // 服务器监听端口
-constexpr int kListenPort = 60000;
+constexpr int kListenPort = 26990;
 
 int main()
 {
@@ -49,7 +49,7 @@ int main()
         });
 
     // 创建服务器对象
-    auto server = std::make_shared<Net::Server::Server>(io, ep, handler);
+    auto server = std::make_shared<Net::Server::Server>(io, ep, handler, 5);
 
     // 注册优雅退出回调：收到退出信号时停止服务器
     Utils::Exit::registerStopCallback([server]() { server->Stop(); });
