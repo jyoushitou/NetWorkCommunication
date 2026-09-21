@@ -245,7 +245,7 @@ namespace Net
 
                               // 判断是否发送完毕或者在发送状态
                               // 是：则发送消息
-                              if (!sending && sendQueue.empty())
+                              if (sendQueue.empty())
                               {
                                   // 启动关闭函数
                                   actuallyClose();
@@ -519,13 +519,27 @@ namespace Net
                                          return;
                                      }
 
+                                     // 判断队列为空
+                                     if (sendQueue.empty())
+                                     {
+                                         // 置关闭状态
+                                         sending = false;
+
+                                         // 关闭状态
+                                         if (closing)
+                                         {
+                                             // 不为空，继续发送
+                                             actuallyClose();
+                                         }
+                                         return;
+                                     }
+
                                      // 弹出发送队列
                                      sendQueue.pop_front();
 
-                                     // 判断队列是否为空
+                                     // 不为空则继续发送
                                      if (!sendQueue.empty())
                                      {
-                                         // 不为空，继续发送
                                          doSend();
                                      }
                                      else

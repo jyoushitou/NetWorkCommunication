@@ -145,12 +145,6 @@ int main()
             }
         });
 
-    // // 创建 18 条内网连接（地址按实际填）
-    // for (size_t i = 0; i < 18; ++i)
-    // {
-    //     CreateConnection(i, serviceID, "127.0.0.1", "60000");
-    // }
-
     Utils::Out::outMsg("输入网址");
     std::string ipv4 = "";
     std::cin >> ipv4;

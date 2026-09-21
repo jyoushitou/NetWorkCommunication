@@ -35,6 +35,8 @@ namespace Net
             this->HF = HF;
             // 给timeout赋值初始化为60s
             this->timeout = timeout ? timeout : 60;
+            // 构造即初始化
+            updateTime();
         }
 
         /// @brief      业务处理
@@ -215,15 +217,15 @@ namespace Net
                                   });
         }
 
-        /// @brief      清理失效会话
+        /// @brief      清理失效/超时会话
         /// @details    投递到 io_context 线程内，移除空指针会话（供监控线程调用）
         void Server::clearSession()
         {
-            // 保活：post 的 lambda 必须捕获 self，否则 Server 可能在使用前被析构
-            auto self = shared_from_this();
             // 在关闭时结束进程
             while (running)
             {
+                // 保活：post 的 lambda 必须捕获 self，否则 Server 可能在使用前被析构
+                auto self = shared_from_this();
                 // 60s轮询
                 std::this_thread::sleep_for(std::chrono::seconds(60));
                 // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 sessions）
@@ -234,7 +236,7 @@ namespace Net
                                       {
                                           if (i->timeOut() && !i->isClosed())
                                           {
-                                              i->reply(-1, "长时间未连接，已自动关闭");
+                                              i->reply(0, "长时间未连接，已自动关闭");
                                               i->closeSession();
                                           }
                                       }
