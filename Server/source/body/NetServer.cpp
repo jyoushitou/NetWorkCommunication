@@ -35,8 +35,6 @@ namespace Net
             this->HF = HF;
             // 给timeout赋值初始化为60s
             this->timeout = timeout ? timeout : 60;
-            // 构造即初始化
-            updateTime();
         }
 
         /// @brief      业务处理
@@ -139,7 +137,7 @@ namespace Net
         /// @param[in] ep 监听的本地端点（地址与端口）
         /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF, long long timeOut)
+                       std::shared_ptr<HandleFunction> HF)
             : ioc(io), acceptor(io), running(true)
         {
             // 打开连接
@@ -152,9 +150,6 @@ namespace Net
             acceptor.listen();
             // 给智能指针赋值
             this->HF = HF;
-
-            // 设置超时时间
-            this->timeOut = timeOut;
 
             // 创建监控线程
             // clearSession 是非静态成员函数，必须显式绑定 this，否则 std::thread 无法推导可调用对象
@@ -217,15 +212,15 @@ namespace Net
                                   });
         }
 
-        /// @brief      清理失效/超时会话
+        /// @brief      清理失效会话
         /// @details    投递到 io_context 线程内，移除空指针会话（供监控线程调用）
         void Server::clearSession()
         {
+            // 保活：post 的 lambda 必须捕获 self，否则 Server 可能在使用前被析构
+            auto self = shared_from_this();
             // 在关闭时结束进程
             while (running)
             {
-                // 保活：post 的 lambda 必须捕获 self，否则 Server 可能在使用前被析构
-                auto self = shared_from_this();
                 // 60s轮询
                 std::this_thread::sleep_for(std::chrono::seconds(60));
                 // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 sessions）
@@ -236,7 +231,7 @@ namespace Net
                                       {
                                           if (i->timeOut() && !i->isClosed())
                                           {
-                                              i->reply(0, "长时间未连接，已自动关闭");
+                                              i->reply(-1, "长时间未连接，已自动关闭");
                                               i->closeSession();
                                           }
                                       }

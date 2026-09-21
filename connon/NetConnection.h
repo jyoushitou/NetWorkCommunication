@@ -184,12 +184,6 @@ namespace Net
         /// @note 可以重写此函数实现时间的更新
         virtual void updateTime() {};
 
-        /// @brief 连接关闭通知
-        /// @details 连接彻底关闭时回调，供派生类做清理或通知上层
-        /// @warning 仅在 IO 线程内被调用，禁止在此长时间阻塞
-        /// @note 可重写，默认空实现
-        virtual void toClosed() {};
-
         /// @brief      析构函数
         /// @details    采用默认析构
         /// @note
