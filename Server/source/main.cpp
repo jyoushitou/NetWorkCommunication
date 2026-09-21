@@ -1,10 +1,8 @@
-/*
- * @file        main.cpp
- * @brief       服务器入口（启动 TCP 服务、处理退出信号）
- * @author      jyoushitou
- * @date        2026-09-16
- * @copyright   Copyright (c) 2026
- */
+/// @file        main.cpp
+/// @brief       服务器入口（启动 TCP 服务、处理退出信号）
+/// @author      jyoushitou
+/// @date        2026-09-16
+/// @copyright   Copyright (c) 2026
 
 // Server/source/main.cpp
 #include "NetServer.h"
