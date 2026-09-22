@@ -170,6 +170,12 @@ int main()
 
     input_thread.detach();
 
+    while (1)
+    {
+        std::string sendmsg;
+        Utils::Out::outMsg("输入发送的消息");
+    }
+
     // ===== 优雅关闭流程（回到主线程执行，安全） =====
     Utils::Out::outMsg("收到退出信号，正在关闭所有连接...");
 

@@ -28,8 +28,7 @@ namespace Net
         /// @param[in] serviceID 服务ID，用于日志打印
         /// @warning    生命周期须长于本客户端
         /// @note
-        Client::Client(boost::asio::io_context& io, int serviceID)
-            : Connection(boost::asio::ip::tcp::socket(io), io), resolver(io)
+        Client::Client(boost::asio::io_context& io) : Connection(boost::asio::ip::tcp::socket(io), io), resolver(io)
         {
         }
 
@@ -89,26 +88,6 @@ namespace Net
                                    });
         }
 
-        /// @brief      注册消息回调
-        /// @details    收到一条消息时触发，在 IO 线程内被调用
-        /// @param[in] cb 消息回调函数（参数为消息ID与消息体）
-        /// @warning    禁止在回调中长时间阻塞
-        /// @note
-        void Client::SetMessageCallback(std::function<void(unsigned long long, std::string)> cb)
-        {
-            message_cb = std::move(cb);
-        }
-
-        /// @brief      注册关闭回调
-        /// @details    连接彻底关闭时触发，在 IO 线程内被调用
-        /// @param[in] cb 关闭回调函数
-        /// @warning    禁止在回调中长时间阻塞
-        /// @note
-        void Client::SetCloseCallback(std::function<void()> cb)
-        {
-            close_cb = std::move(cb);
-        }
-
         /// @brief 后期转到具体业务
         /// @details 收到完整消息后回调上层注册的消息回调
         /// @param msg_id 消息id
@@ -117,20 +96,10 @@ namespace Net
         /// @note
         void Client::recvToWork(unsigned long long msg_id, std::string msg)
         {
-            if (message_cb)
+            if (HF)
             {
-                message_cb(msg_id, std::move(msg));
+                (*HF)(msg_id, std::move(msg));
             }
-        }
-
-        /// @brief 连接关闭通知
-        /// @details 连接彻底关闭时回调，触发上层注册的关闭回调
-        /// @warning 仅在 IO 线程内被调用，禁止在此长时间阻塞
-        /// @note
-        void Client::toClosed()
-        {
-            if (close_cb)
-                close_cb();
         }
 
         /// @brief      停止函数

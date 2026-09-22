@@ -196,6 +196,9 @@ namespace Net
         /// @note
         void close();
 
+        /// @brief 关闭函数，派生类重写
+        virtual void toClosed() {};
+
         /// @brief      关闭socket
         /// @details    关闭socket并处理发送队列，IO线程内调用
         /// @warning    内部使用，禁止外部直接调用
