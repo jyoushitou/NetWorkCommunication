@@ -6,7 +6,6 @@ namespace Net
 {
     namespace Client
     {
-
         /// @brief      开始函数
         /// @details    发出连接测试请求并启动连接的异步读取流程
         /// @warning    须在socket连接建立后调用
@@ -28,8 +27,12 @@ namespace Net
         /// @param[in] serviceID 服务ID，用于日志打印
         /// @warning    生命周期须长于本客户端
         /// @note
-        Client::Client(boost::asio::io_context& io) : Connection(boost::asio::ip::tcp::socket(io), io), resolver(io)
+        Client::Client(boost::asio::io_context& io, std::unique_ptr<HandleFunction> HF, HostPort HP)
+            : Connection(boost::asio::ip::tcp::socket(io), io), resolver(io)
         {
+            this->HF = std::move(HF);
+            this->HP = HP;
+            Connect();
         }
 
         /// @brief      连接服务器端
@@ -38,7 +41,7 @@ namespace Net
         /// @param[in] port 服务器端口
         /// @warning    须在 IO 线程启动前调用
         /// @note
-        void Client::Connect(const std::string& host, const std::string& port)
+        void Client::Connect()
         {
             // 保活：延长本对象生命周期至异步操作完成
             auto self = shared_from_this();
@@ -47,45 +50,45 @@ namespace Net
             /// @details    使用成员resolver（必须作为成员，保证异步解析期间resolver对象存活）
             /// @warning    解析期间须保证本对象存活
             /// @note
-            resolver.async_resolve(host, port,
-                                   [this, self, host, port](const boost::system::error_code& ec,
-                                                            boost::asio::ip::tcp::resolver::results_type endpoints)
-                                   {
-                                       // 解析失败处理
-                                       if (ec)
-                                       {
-                                           Utils::Out::outErr("解析地址失败: " + ec.what());
-                                           // 通知主线程退出，防止 WaitForMessage 永久阻塞
-                                           close();
-                                           return;
-                                       }
+            resolver.async_resolve(
+                HP.host, HP.port,
+                [this, self](const boost::system::error_code& ec,
+                             boost::asio::ip::tcp::resolver::results_type endpoints)
+                {
+                    // 解析失败处理
+                    if (ec)
+                    {
+                        Utils::Out::outErr("解析地址失败: " + ec.what());
+                        // 通知主线程退出，防止 WaitForMessage 永久阻塞
+                        close();
+                        return;
+                    }
 
-                                       /// @brief      异步连接
-                                       /// @details    使用解析得到的端点建立 TCP 连接
-                                       /// @warning    连接期间须保证本对象存活
-                                       /// @note
-                                       boost::asio::async_connect(
-                                           socket, endpoints,
-                                           [this, self, host](const boost::system::error_code& ec_conect,
-                                                              const boost::asio::ip::tcp::endpoint&)
-                                           {
-                                               /// @brief      连接失败处理
-                                               /// @details    打印错误并关闭连接
-                                               /// @note
-                                               if (ec_conect)
-                                               {
-                                                   Utils::Out::outErr("连接失败: " + ec_conect.what());
-                                                   close();
-                                                   return;
-                                               }
+                    /// @brief      异步连接
+                    /// @details    使用解析得到的端点建立 TCP 连接
+                    /// @warning    连接期间须保证本对象存活
+                    /// @note
+                    boost::asio::async_connect(
+                        socket, endpoints,
+                        [this, self](const boost::system::error_code& ec_conect, const boost::asio::ip::tcp::endpoint&)
+                        {
+                            /// @brief      连接失败处理
+                            /// @details    打印错误并关闭连接
+                            /// @note
+                            if (ec_conect)
+                            {
+                                Utils::Out::outErr("连接失败: " + ec_conect.what());
+                                close();
+                                return;
+                            }
 
-                                               /// @brief      连接成功后启动
-                                               /// @details    打印日志并启动连接的异步读取流程
-                                               /// @note
-                                               Utils::Out::outMsg(host + "连接成功");
-                                               start();
-                                           });
-                                   });
+                            /// @brief      连接成功后启动
+                            /// @details    打印日志并启动连接的异步读取流程
+                            /// @note
+                            Utils::Out::outMsg(this->HP.host + "连接成功");
+                            start();
+                        });
+                });
         }
 
         /// @brief 后期转到具体业务

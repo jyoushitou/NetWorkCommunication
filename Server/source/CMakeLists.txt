@@ -1,13 +1,15 @@
 cmake_minimum_required(VERSION 3.16)
 
-# 如果未指定工具链文件，优先使用 vcpkg（通过 VCPKG_ROOT 环境变量或项目内 vcpkg 目录）
+# ── 通过 vcpkg 查找依赖（可移植写法）───────────────────
+# 不硬编码任何本机路径，使用 vcpkg 官方推荐机制：
+#   1) 命令行传入 -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake
+#   2) 或设置环境变量 VCPKG_ROOT
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
-    if(DEFINED ENV{VCPKG_ROOT})
-        set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
-        set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
+    if(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+        set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+            CACHE STRING "vcpkg toolchain file")
     else()
-        message(FATAL_ERROR "未找到 vcpkg 工具链，请设置 VCPKG_ROOT 环境变量，或使用 -DCMAKE_TOOLCHAIN_FILE=... 指定工具链文件")
+        message(FATAL_ERROR "未找到 vcpkg 工具链：请设置环境变量 VCPKG_ROOT，或使用 -DCMAKE_TOOLCHAIN_FILE=... 指定 vcpkg.cmake")
     endif()
 endif()
 

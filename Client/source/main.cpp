@@ -1,3 +1,9 @@
+/// @file        main.cpp
+/// @brief       客户端入口（建立连接、发送消息、优雅退出）
+/// @author      jyoushitou
+/// @date        2026-09-16
+/// @copyright   Copyright (c) 2026
+
 // Client/source/main.cpp
 #include "NetClient.h"
 #include "Utils.h"
@@ -7,118 +13,76 @@
 
 #include <memory>
 #include <vector>
+#include <string>
 #include <thread>
 #include <atomic>
 #include <iostream>
+#include <limits>
 
-struct ConnItem
+/// @brief 存储客户端及其运行环境
+/// @note 成员声明顺序决定析构逆序：iot -> hostport -> client -> io
+///       必须保证 client 先于 io_context 析构，避免 socket 访问已释放的 io_context
+struct ClientPtr
 {
+    /// @brief 保存会话的 io_context
+    /// @warning 生命周期必须长于 client
     std::unique_ptr<boost::asio::io_context> io;
+
+    /// @brief 客户端指针
+    /// @note client客户端指针，hostport存储ip端口
     std::shared_ptr<Net::Client::Client> client;
-    std::thread io_thread;
+
+    /// @brief 记录该客户端对应的ip与端口
+    Net::Client::HostPort hostport;
+
+    /// @brief io线程
+    std::thread iot;
 };
 
-// ============ 全局状态 ============
-/// @brief      连接数组
-/// @details    储存所有连接，每条连接含独立 io_context、客户端与线程
-/// @warning    创建连接完成后才可访问，禁止在多线程中同时增删
-/// @note
-std::vector<std::shared_ptr<ConnItem>> g_conns;
-/// @brief      运行标志
-/// @details    标记客户端是否运行中（回调线程只碰这个）
-/// @note
-std::atomic<bool> g_running{true};
-/// @brief      总连接数
-/// @details    记录创建的连接总数（CreateConnection 中递增）
-/// @note
-std::atomic<size_t> g_total_conns{0};
-/// @brief      已关闭连接数
-/// @details    记录已关闭的连接数（OnClose 中递增）
-/// @note
-std::atomic<size_t> g_closed_conns{0};
+/// @brief 存储客户端数组
+std::vector<ClientPtr> clients;
 
-// ============ 业务回调（各自连接的 IO 线程中执行） ============
-
-/// @brief      消息处理
-/// @details    收到消息后在对应连接的 IO 线程中执行，打印日志
-/// @param[in] idx 连接下标
-/// @param[in] serviceID 服务ID，用于日志打印
-/// @param[in] msg_id 消息全局唯一ID
-/// @param[in] msg 消息体
-/// @warning    仅在 IO 线程内被调用，禁止长时间阻塞
+/// @brief 消息ID生成器
+/// @details 连接测试固定用 0，业务消息从 1 开始自增，保证每条消息 ID 唯一
 /// @note
-void Work(size_t idx, int serviceID, unsigned long long msg_id, const std::string& msg)
+std::atomic<unsigned long long> g_msg_id{0};
+
+/// @brief 对应业务的回调
+/// @param msg_id 消息id
+/// @param msg 消息
+void HandleWork(unsigned long long msg_id, std::string msg)
 {
-    Utils::Out::outNetMsg(msg_id, "线程" + std::to_string(idx) + "收到消息: " + msg);
+    Utils::Out::outNetMsg(msg_id, "服务器发来的消息：" + msg);
 }
-
-/// @brief      关闭回调
-/// @details    连接彻底关闭后执行，统计已关闭数并在全部关闭后唤醒主线程
-/// @param[in] idx 连接下标
-/// @param[in] serviceID 服务ID，用于日志打印
-/// @warning    仅在 IO 线程内被调用，禁止长时间阻塞
-/// @note
-void close(size_t idx, int serviceID)
-{
-    Utils::Out::outMsg("正在关闭:" + std::to_string(static_cast<int>(10 + idx)) + "线程");
-
-    // 统计已关闭数：fetch_add 返回旧值，+1 得到新值
-    size_t closed = g_closed_conns.fetch_add(1) + 1;
-    size_t remain = g_total_conns.load() - closed;
-    Utils::Out::outMsg("当前剩余线程数，" + std::to_string(remain));
-
-    // 全部关闭后，走 Utils 统一退出流程唤醒主线程
-    if (closed == g_total_conns.load())
-    {
-        Utils::Exit::recviceExit();
-    }
-}
-
-// ============ 创建连接 ============
 
 /// @brief      创建连接
 /// @details    创建专属 io_context、客户端与线程，注册回调并异步发起连接
-/// @param[in] idx 连接下标
-/// @param[in] serviceID 服务ID，用于日志打印
-/// @param[in] host 服务器地址
-/// @param[in] port 服务器端口
-/// @warning    须在 IO 线程启动前调用，禁止多线程并发调用
+/// @param[in] HP 服务器地址与端口
+/// @warning    须在 IO 线程启动前、由主线程调用，禁止多线程并发调用
 /// @note
-void CreateConnection(size_t idx, int serviceID, const std::string& host, const std::string& port)
+void CreateConnection(const Net::Client::HostPort& HP)
 {
-    Utils::Out::outMsg("正在连接");
+    Utils::Out::outMsg("正在连接 " + HP.host + ":" + HP.port);
 
-    // 总连接数统计自增
-    g_total_conns.fetch_add(1);
+    ClientPtr cp;
+    cp.hostport = HP;
 
-    // 创建连接项（含 io_context、客户端与线程）
-    auto conn = std::make_shared<ConnItem>();
+    // 先创建专属 io_context（生命周期必须长于 client，client 内部持有其引用）
+    cp.io = std::make_unique<boost::asio::io_context>();
 
-    // 创建专属io_context
-    conn->io = std::make_unique<boost::asio::io_context>();
+    // 创建线程独立的客户端：构造函数内部会异步发起连接
+    // （此时 io_context 尚未 run，异步操作先入队，随后由 IO 线程驱动）
+    cp.client =
+        std::make_shared<Net::Client::Client>(*cp.io, std::make_unique<Net::Client::HandleFunction>(HandleWork), HP);
 
-    // 创建线程独立的客户端
-    conn->client = std::make_shared<Net::Client::Client>(*conn->io, serviceID);
-
-    // 注册回调（捕获 idx，避免共享状态）
-    conn->client->SetMessageCallback([idx, serviceID](unsigned long long id, std::string msg)
-                                     { Work(idx, serviceID, id, msg); });
-
-    // 设置关闭回调
-    conn->client->SetCloseCallback([idx, serviceID]() { close(idx, serviceID); });
-
-    // 异步连接，先发起连接保证 io_context 中有任务
-    conn->client->Connect(host, port);
+    // 先放入数组再启动线程，避免线程拿到被移动/已销毁的对象
+    clients.push_back(std::move(cp));
 
     // 每连接 1 个线程驱动自己的 io_context
-    conn->io_thread = std::thread(
-        [conn]
-        {
-            conn->io->run(); // 阻塞直到该连接 Stop() 后 io_context 无任务
-        });
-
-    // 将独立io_context加入数组
-    g_conns.push_back(conn);
+    // 注意：必须用 lambda 捕获；不能写 std::thread(io->run())
+    //       —— 那会在当前线程直接阻塞执行 run()，并把返回值交给线程
+    boost::asio::io_context* io = clients.back().io.get();
+    clients.back().iot = std::thread([io]() { io->run(); });
 }
 
 // ============ main ============
@@ -128,62 +92,119 @@ int main()
     // 初始化控制台、日志目录、退出事件与信号处理（含 Ctrl+C / 关窗 / 系统关机）
     Utils::init();
 
-    int serviceID = ServiceID_RPCGateway;
     // 让日志打印出正确的服务名（Utils::Out 内部使用 serviceID）
-    Utils::serviceID = serviceID;
+    Utils::serviceID = ServiceID_RPCGateway;
 
-    // 注册优雅退出回调：收到退出信号时关闭所有连接。
-    // ⚠️ 本回调在系统信号线程内执行，只做线程安全的 Stop()，绝不做 join/阻塞等待
+    // 注册优雅退出回调：收到退出信号时停止所有连接
+    // 必须在创建连接前注册，且回调内遍历数组，故对后加入的连接同样生效
     Utils::Exit::registerStopCallback(
         []()
         {
-            g_running = false;
-            for (auto& conn : g_conns)
+            Utils::Out::outMsg("正在关闭所有连接...");
+            for (auto& cp : clients)
             {
-                if (conn->client)
-                    conn->client->Stop();
+                if (cp.client)
+                {
+                    cp.client->Stop();
+                }
             }
         });
 
-    Utils::Out::outMsg("输入网址");
-    std::string ipv4 = "";
-    std::cin >> ipv4;
+    Utils::Out::outMsg("请输入服务器地址与端口（例如：127.0.0.1 26990）");
+    Net::Client::HostPort HP;
+    if (!(std::cin >> HP.host >> HP.port))
+    {
+        Utils::Out::outErr("输入无效，客户端退出");
+        return -1;
+    }
+    // 丢弃读取 host/port 后残留的换行符，供后面 getline 使用
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
-    CreateConnection(1, serviceID, ipv4, "26990");
+    // 建立连接（内部异步发起 Connect，必须在 IO 线程启动前完成）
+    CreateConnection(HP);
 
-    Utils::Out::outMsg("客户端运行中，按 Ctrl+C 退出");
+    Utils::Out::outMsg("客户端运行中，输入消息回车发送（输入 quit 或按 Ctrl+C 退出）");
 
+    // 输入线程：阻塞读控制台，读到一行就发给服务器
+    // 说明：本线程可能长期阻塞在 getline 上（Ctrl+C 无法唤醒它），
+    //       故退出时不 join，直接 detach，由进程退出统一回收
     std::thread input_thread(
-        []
+        []()
         {
-            std::string str;
-            while (g_running && std::cin >> str)
+            std::string line;
+            while (Utils::Exit::running.load() && std::getline(std::cin, line))
             {
-                // 防御性检查：g_conns 在连接创建完成后才启动本线程，非空
-                if (!g_conns.empty() && g_conns[0]->client)
-                    g_conns[0]->client->toSend(0, str);
+                if (line.empty())
+                {
+                    continue;
+                }
+
+                // 主动退出
+                if (line == "quit" || line == "exit")
+                {
+                    break;
+                }
+
+                if (clients.empty() || !clients.front().client)
+                {
+                    Utils::Out::outErr("连接尚未建立，消息未发送");
+                    continue;
+                }
+
+                // 自增消息ID，保证同一条消息的ID唯一
+                unsigned long long msg_id = ++g_msg_id;
+
+                try
+                {
+                    clients.front().client->toSend(msg_id, line);
+                    Utils::Out::outNetMsg(msg_id, "已发送：" + line);
+                }
+                catch (const std::exception& e)
+                {
+                    // toSend 对空消息/超长消息会抛异常，这里兜底防止线程退出
+                    Utils::Out::outErr(std::string("发送失败：") + e.what());
+                }
             }
+
+            // 控制台输入结束（EOF 或 quit）也触发统一退出
+            Utils::Exit::recviceExit();
         });
-
-    // 阻塞等待退出信号（由 Utils::Exit 统一处理 Ctrl+C / 关窗 / 全部连接关闭）
-    Utils::Exit::waitExit();
-
     input_thread.detach();
 
-    while (1)
-    {
-        std::string sendmsg;
-        Utils::Out::outMsg("输入发送的消息");
-    }
+    // 主线程阻塞等待退出信号（由 Utils::Exit 统一处理 Ctrl+C / 关窗 / 全部连接关闭）
+    Utils::Exit::waitExit();
 
-    // ===== 优雅关闭流程（回到主线程执行，安全） =====
     Utils::Out::outMsg("收到退出信号，正在关闭所有连接...");
 
-    // Stop 已在退出回调中投递，这里只需等待所有 IO 线程结束
-    // 流程：Stop -> close -> actuallyClose -> toClosed -> io 无任务 -> run() 返回
-    for (auto& conn : g_conns)
-        if (conn->io_thread.joinable())
-            conn->io_thread.join();
+    // 停止所有客户端的收发（幂等，可安全重复调用）
+    for (auto& cp : clients)
+    {
+        if (cp.client)
+        {
+            cp.client->Stop();
+        }
+    }
+
+    // 停止 io_context，让 run() 尽快返回
+    for (auto& cp : clients)
+    {
+        if (cp.io)
+        {
+            cp.io->stop();
+        }
+    }
+
+    // 回收 IO 线程
+    for (auto& cp : clients)
+    {
+        if (cp.iot.joinable())
+        {
+            cp.iot.join();
+        }
+    }
+
+    // 释放连接（成员析构逆序保证 client 先于 io_context 销毁）
+    clients.clear();
 
     Utils::Out::outMsg("客户端已退出");
     return 0;
