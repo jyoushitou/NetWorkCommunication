@@ -12,6 +12,14 @@ namespace Net
 {
     namespace Client
     {
+        /// @brief 存储ip和端口
+        /// @note host:ip地址，port:端口
+        struct HostPort
+        {
+            std::string host;
+            std::string port;
+        };
+
         /// @brief 业务回调类型
         /// @details 用于在收到消息后的处理
         using HandleFunction = std::function<void(unsigned long long, std::string)>;
@@ -26,18 +34,16 @@ namespace Net
             /// @brief      构造函数
             /// @details    唯一的构造函数
             /// @param[in] io 保存会话的io_context
-            /// @param[in] serviceID 服务ID，用于日志打印
+            /// @param[in] HF 存储回调函数
             /// @warning    生命周期须长于本客户端
             /// @note
-            Client(boost::asio::io_context&);
+            explicit Client(boost::asio::io_context& io, std::unique_ptr<HandleFunction> HF, HostPort HP);
 
             /// @brief      连接服务器端
             /// @details    异步解析地址并建立连接，成功后自动调用 start()
-            /// @param[in] host 服务器地址
-            /// @param[in] port 服务器端口
             /// @warning    须在 IO 线程启动前调用
             /// @note
-            void Connect(const std::string& host, const std::string& port);
+            void Connect();
 
             /// @brief      开始函数
             /// @details    发出连接测试请求并启动连接的异步读取流程
@@ -50,6 +56,10 @@ namespace Net
             /// @warning    异步执行，调用后连接不再可用
             /// @note
             void Stop();
+
+            /// @brief 获取端口和ip
+            /// @return 返回hostport结构体
+            HostPort getHostPort();
 
         protected:
             /// @brief 后期转到具体业务
@@ -70,6 +80,10 @@ namespace Net
             /// @details    收到消息时调用的上层回调
             /// @note
             std::unique_ptr<HandleFunction> HF;
+
+            /// @brief 记录对应的IP和port
+            /// @details 记录这个client对应的host和port
+            HostPort HP;
         };
     } // namespace Client
 } // namespace Net
