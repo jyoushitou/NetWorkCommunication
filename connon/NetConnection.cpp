@@ -247,6 +247,11 @@ namespace Net
                               // 标记关闭状态
                               closing = true;
 
+                              if (sending)
+                              {
+                                  return;
+                              }
+
                               // 判断是否发送完毕或者在发送状态
                               // 是：则发送消息
                               if (!sending && sendQueue.empty())
@@ -492,7 +497,7 @@ namespace Net
             // 将发送状态变量更新
             sending = false;
             // 队列发完且未请求过关闭
-            if (!closing)
+            if (closing)
             {
                 actuallyClose();
             }
