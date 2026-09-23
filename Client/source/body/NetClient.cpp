@@ -30,9 +30,10 @@ namespace Net
         Client::Client(boost::asio::io_context& io, std::unique_ptr<HandleFunction> HF, HostPort HP)
             : Connection(boost::asio::ip::tcp::socket(io), io), resolver(io)
         {
+            // 注册回调
             this->HF = std::move(HF);
+            // 注册host和port
             this->HP = HP;
-            Connect();
         }
 
         /// @brief      连接服务器端

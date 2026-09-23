@@ -208,7 +208,14 @@ namespace Net
         socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         socket.close(ec);
 
-        sendQueue.clear();
+        // 这里不能无条件清空 sendQueue：异步写回调可能还在执行，
+        // 其 pop_front() 需要依赖队列仍然存在，避免 Debug 断言中 deque empty 崩溃。
+        // 若当前确实没有发送任务，才做一次最终清理；而有异步写未完成时，
+        // 让回调自己决定何时弹出队首并结束状态。
+        if (!sending)
+        {
+            sendQueue.clear();
+        }
 
         // 防止多次通知关闭
         if (!closeNotified)
@@ -516,8 +523,12 @@ namespace Net
                                          return;
                                      }
 
-                                     // 弹出发送队列
-                                     sendQueue.pop_front();
+                                     // 关闭流程可能已提前清空队列；如果当前这条任务仍在队头，
+                                     // 才允许弹出，避免 deque empty 的 Debug 断言。
+                                     if (!sendQueue.empty() && sendQueue.front() == send_node)
+                                     {
+                                         sendQueue.pop_front();
+                                     }
 
                                      // 判断队列是否为空
                                      if (!sendQueue.empty())

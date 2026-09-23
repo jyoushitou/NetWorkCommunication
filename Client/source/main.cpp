@@ -69,6 +69,9 @@ void CreateConnection(const Net::Client::HostPort& HP)
     cp.client =
         std::make_shared<Net::Client::Client>(io, std::make_unique<Net::Client::HandleFunction>(HandleWork), HP);
 
+    // 连接
+    cp.client->Connect();
+
     // 先放入数组再启动线程，避免线程拿到被移动/已销毁的对象
     clients.push_back(std::move(cp));
 
