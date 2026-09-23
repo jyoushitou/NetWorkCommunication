@@ -57,6 +57,10 @@ namespace Net
             /// @note
             void Stop();
 
+            /// @brief 获取端口和ip
+            /// @return 返回hostport结构体
+            HostPort getHostPort();
+
         protected:
             /// @brief 后期转到具体业务
             /// @param msg_id 消息id

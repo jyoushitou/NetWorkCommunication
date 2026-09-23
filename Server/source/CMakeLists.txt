@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 
+# CMake 4.x 已移除 FindBoost 模块，显式采用 NEW 行为，消除 CMP0167 回退警告
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
+
 # ── 通过 vcpkg 查找依赖（可移植写法）───────────────────
 # 不硬编码任何本机路径，使用 vcpkg 官方推荐机制：
 #   1) 命令行传入 -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake
@@ -12,6 +18,10 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
         message(FATAL_ERROR "未找到 vcpkg 工具链：请设置环境变量 VCPKG_ROOT，或使用 -DCMAKE_TOOLCHAIN_FILE=... 指定 vcpkg.cmake")
     endif()
 endif()
+
+# 使用 vcpkg classic 模式已安装的依赖，关闭 manifest 自动安装，
+# 避免 vcpkg.json 触发联网下载 / 版本升级（如 1.90.0 -> 1.91.0）
+set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "使用 vcpkg classic 已安装依赖" FORCE)
 
 project(Server)
 
@@ -29,7 +39,7 @@ if(MSVC)
 endif()
 
 # 查找 Boost 库 (asio, system, thread)
-find_package(Boost REQUIRED COMPONENTS system thread)
+find_package(Boost CONFIG REQUIRED COMPONENTS system thread)
 
 # 共享代码目录
 set(COMMON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../connon)

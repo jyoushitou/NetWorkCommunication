@@ -1,9 +1,3 @@
-/// @file        main.cpp
-/// @brief       客户端入口（建立连接、发送消息、优雅退出）
-/// @author      jyoushitou
-/// @date        2026-09-16
-/// @copyright   Copyright (c) 2026
-
 // Client/source/main.cpp
 #include "NetClient.h"
 #include "Utils.h"
@@ -20,20 +14,13 @@
 #include <limits>
 
 /// @brief 存储客户端及其运行环境
-/// @note 成员声明顺序决定析构逆序：iot -> hostport -> client -> io
+/// @note 成员声明顺序决定析构逆序：iot -> client
 ///       必须保证 client 先于 io_context 析构，避免 socket 访问已释放的 io_context
 struct ClientPtr
 {
-    /// @brief 保存会话的 io_context
-    /// @warning 生命周期必须长于 client
-    std::unique_ptr<boost::asio::io_context> io;
-
     /// @brief 客户端指针
     /// @note client客户端指针，hostport存储ip端口
     std::shared_ptr<Net::Client::Client> client;
-
-    /// @brief 记录该客户端对应的ip与端口
-    Net::Client::HostPort hostport;
 
     /// @brief io线程
     std::thread iot;
@@ -41,6 +28,11 @@ struct ClientPtr
 
 /// @brief 存储客户端数组
 std::vector<ClientPtr> clients;
+
+/// @brief 存储各连接专属的 io_context
+/// @details ClientPtr 不含 io 成员（结构体不可改），故由本全局容器统一持有
+/// @note 需保证析构晚于 clients 中对应 client，故必须在 clients.clear() 之后再清理
+std::vector<std::unique_ptr<boost::asio::io_context>> g_ios;
 
 /// @brief 消息ID生成器
 /// @details 连接测试固定用 0，业务消息从 1 开始自增，保证每条消息 ID 唯一
@@ -64,25 +56,26 @@ void CreateConnection(const Net::Client::HostPort& HP)
 {
     Utils::Out::outMsg("正在连接 " + HP.host + ":" + HP.port);
 
-    ClientPtr cp;
-    cp.hostport = HP;
-
     // 先创建专属 io_context（生命周期必须长于 client，client 内部持有其引用）
-    cp.io = std::make_unique<boost::asio::io_context>();
+    // 由全局容器持有：vector 重分配只移动 unique_ptr，不移动 io_context 本体，
+    // 因此引用保持有效
+    g_ios.push_back(std::make_unique<boost::asio::io_context>());
+    boost::asio::io_context& io = *g_ios.back();
+
+    ClientPtr cp;
 
     // 创建线程独立的客户端：构造函数内部会异步发起连接
     // （此时 io_context 尚未 run，异步操作先入队，随后由 IO 线程驱动）
     cp.client =
-        std::make_shared<Net::Client::Client>(*cp.io, std::make_unique<Net::Client::HandleFunction>(HandleWork), HP);
+        std::make_shared<Net::Client::Client>(io, std::make_unique<Net::Client::HandleFunction>(HandleWork), HP);
 
     // 先放入数组再启动线程，避免线程拿到被移动/已销毁的对象
     clients.push_back(std::move(cp));
 
     // 每连接 1 个线程驱动自己的 io_context
-    // 注意：必须用 lambda 捕获；不能写 std::thread(io->run())
+    // 注意：必须用 lambda 捕获；不能写 std::thread(io.run())
     //       —— 那会在当前线程直接阻塞执行 run()，并把返回值交给线程
-    boost::asio::io_context* io = clients.back().io.get();
-    clients.back().iot = std::thread([io]() { io->run(); });
+    clients.back().iot = std::thread([&io]() { io.run(); });
 }
 
 // ============ main ============
@@ -186,11 +179,11 @@ int main()
     }
 
     // 停止 io_context，让 run() 尽快返回
-    for (auto& cp : clients)
+    for (auto& io : g_ios)
     {
-        if (cp.io)
+        if (io)
         {
-            cp.io->stop();
+            io->stop();
         }
     }
 
@@ -203,8 +196,9 @@ int main()
         }
     }
 
-    // 释放连接（成员析构逆序保证 client 先于 io_context 销毁）
+    // 释放连接：先销毁 client，再销毁 io_context
     clients.clear();
+    g_ios.clear();
 
     Utils::Out::outMsg("客户端已退出");
     return 0;
