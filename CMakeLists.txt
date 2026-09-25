@@ -72,7 +72,7 @@ set_target_properties(CommonNetCore PROPERTIES EXPORT_NAME Net::Core)
 
 # ── 服务端库 ────────────────────────────────────────────
 add_library(CommonNetServer
-    Server/source/body/NetServer.cpp)
+    Server/source/NetServer.cpp)
 common_net_options(CommonNetServer)
 target_include_directories(CommonNetServer PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Server/source/include>
@@ -83,7 +83,7 @@ set_target_properties(CommonNetServer PROPERTIES EXPORT_NAME Net::Server)
 
 # ── 客户端库 ────────────────────────────────────────────
 add_library(CommonNetClient
-    Client/source/body/NetClient.cpp)
+    Client/source/NetClient.cpp)
 common_net_options(CommonNetClient)
 target_include_directories(CommonNetClient PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Client/source/include>
