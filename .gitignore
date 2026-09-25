@@ -6,6 +6,7 @@
 
 # 编译产物
 build/
+install/
 bin/
 obj/
 *.o
@@ -18,10 +19,12 @@ obj/
 
 # IDE 配置
 .idea/
+.vs/
 *.suo
 *.user
 *.userosscache
 *.sln.docstates
+
 
 # 日志和临时文件
 *.log
@@ -32,3 +35,6 @@ obj/
 *~
 .DS_Store
 Thumbs.db
+sdk/
+out/
+lib/

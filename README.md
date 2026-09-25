@@ -29,47 +29,56 @@
 - 客户端支持多连接并行（每连接独立 `io_context` + 独立线程)
 - 客户端提供回调机制(`SetMessageCallback` / `SetCloseCallback`)接收消息与关闭通知
 - 内置服务 ID 映射宏(`Message.h`,支持 1~16 号服务路由扩展)
+- `Common`/`Utils`/`Net` 分层命名，构建期别名与安装后导出名一致，支持 `find_package(CommonNet)` 复用
 
 ## 环境依赖
 
 - CMake >= 3.16
 - C++17
 - Boost(asio / system / thread / beast)
-- vcpkg(推荐)或系统安装的 Boost
-  - CMakeLists 会自动检测 `VCPKG_ROOT` 环境变量或项目内 `vcpkg/` 目录作为工具链
+- vcpkg(推荐)或系统安装的 Boost（CMakeLists 自动检测 `VCPKG_ROOT`，或用 `-DCMAKE_TOOLCHAIN_FILE=...` 指定）
 
 ## 目录结构
 
 ```
 NetWorkCommunication/
-├── connon/                  # 公共网络库核心代码
+├── connon/                  # 公共网络库核心代码（提交）
 │   ├── Message.h            # 常量定义（消息头长度、服务ID映射、原子消息ID）
 │   ├── NetConnection.h      # 连接基类、MsgNode/RecvNode/SendNode 声明
 │   ├── NetConnection.cpp    # 异步收发、字节序转换、消息解析、发送队列实现
 │   ├── Utils.h              # 日志输出工具声明
 │   └── Utils.cpp            # 日志输出工具实现
-├── Server/                  # 服务端示例
+├── Server/                  # 服务端（提交）
 │   └── source/
-│       ├── main.cpp         # 服务端入口，信号处理/优雅退出/等待并回复消息/HTTP 服务器启动
-│       ├── CMakeLists.txt   # 自动检测 vcpkg 工具链、/MP /FS /utf-8 编译选项
+│       ├── main.cpp         # 服务端示例入口，信号处理/优雅退出/等待并回复消息/HTTP 服务器启动
 │       ├── include/
 │       │   ├── NetServer.h      # Server / Session 声明
 │       │   └── NetHttpServer.h  # HttpServer / HttpSession 声明（Vue3 前端 HTTP 接入）
 │       └── body/
 │           ├── NetServer.cpp    # accept、会话管理、线程安全消息队列、WaitForMessage
 │           └── NetHttpServer.cpp # Beast HTTP 解析、HttpServer/HttpSession 实现
-├── Client/                  # 客户端示例
-│   ├── source/
-│   │   ├── main.cpp         # 客户端入口，支持多连接、事件机制优雅退出
-│   │   ├── CMakeLists.txt
-│   │   ├── include/
-│   │   │   └── NetClient.h  # Client 声明
-│   │   └── body/
-│   │       └── NetClient.cpp # 异步连接（成员resolver）、消息回调、关闭回调
-├── .gitignore
+├── Client/                  # 客户端（提交）
+│   └── source/
+│       ├── main.cpp         # 客户端示例入口，支持多连接、事件机制优雅退出
+│       ├── include/
+│       │   └── NetClient.h  # Client 声明
+│       └── body/
+│           └── NetClient.cpp # 异步连接（成员resolver）、消息回调、关闭回调
+├── examples/
+│   └── CMakeLists.txt       # Server / Client 示例可执行文件定义（复用各自 main.cpp）（提交）
+├── cmake/
+│   └── CommonNetConfig.cmake.in  # 安装包配置模板（find_package(CommonNet) 用）（提交）
+├── lib/                     # 预留目录：本地第三方预编译库/依赖，一般不提交
+│                            #   （空目录 Git 不追踪，需要保留可放 lib/.gitkeep）
+├── build/                   # 构建产物目录（cmake -B build），不提交，已由 .gitignore 忽略
+├── out/                     # IDE（VS/CMake 集成）输出目录，不提交，建议加入 .gitignore
+├── CMakeLists.txt           # 根构建入口：统一生成 CommonUtils/CommonNetCore/CommonNetServer/CommonNetClient（提交）
+├── .gitignore               # 忽略 build/out/*.lib/*.exe 等产物（提交）
 ├── LICENSE
 └── README.md
 ```
+
+> **提交约定**：`connon/`、`Server/`、`Client/`、`examples/`、`cmake/`、`CMakeLists.txt`、`README.md`、`LICENSE`、`.gitignore` 为源码与构建脚本，需要提交；`build/`、`out/`、`lib/`（第三方二进制）、以及 `*.lib/*.exe/*.pdb` 等编译产物仅本地保留，不提交。
 
 ## 消息协议
 
@@ -101,40 +110,62 @@ export VCPKG_ROOT=/path/to/vcpkg
 
 > 也可以将 vcpkg 克隆到项目根目录的 `vcpkg/` 子目录下，CMakeLists 同样会自动检测。或者显式指定：`-DCMAKE_TOOLCHAIN_FILE=...`。
 
-### 编译服务端
+### 编译（根目录统一构建）
+
+所有库与示例都由**根目录 `CMakeLists.txt` 统一生成**，不再单独进入 `Server/`、`Client/` 子目录编译（子目录内已不保留独立 `CMakeLists.txt`）。
 
 ```bash
-cd Server/source
+# 在项目根目录执行
 cmake -B build
 cmake --build build --config Debug
 ```
 
-### 编译客户端
+生成的目标：
+
+| 目标                | 类型       | 说明                                                                             |
+| ------------------- | ---------- | -------------------------------------------------------------------------------- |
+| `CommonUtils`       | 静态库     | 日志/通用工具（`connon/Utils.cpp`）                                              |
+| `CommonNetCore`     | 静态库     | 协议 / 连接核心（`connon/NetConnection.cpp`），链接 `CommonUtils`                |
+| `CommonNetServer`   | 静态库     | 服务端（`Server/source/body/NetServer.cpp`），链接 `CommonNetCore`               |
+| `CommonNetClient`   | 静态库     | 客户端（`Client/source/body/NetClient.cpp`），链接 `CommonNetCore`               |
+| `Server` / `Client` | 可执行文件 | 示例程序，位于构建目录 `examples/` 下（`-DCOMMONNET_BUILD_EXAMPLES=OFF` 可关闭） |
+
+> **命名层级**：`Common`(大功能) → `Utils` / `Net`(小功能) → `Core` / `Server` / `Client`(具体库)。
+> **CMake 别名**（构建期别名与安装后导出名一致）：`Common::Utils`、`Common::Net::Core`、`Common::Net::Server`、`Common::Net::Client`。
+> **依赖链**：`CommonUtils` ← `CommonNetCore` ←（`CommonNetServer` / `CommonNetClient`）。
+
+### 安装与在其他项目中使用
 
 ```bash
-cd Client/source
-cmake -B build
-cmake --build build --config Debug
+# 安装（头文件与库导出为 CommonNet 包）
+cmake --install build --prefix <安装目录>
+```
+
+安装后在别的工程里引用：
+
+```cmake
+find_package(CommonNet REQUIRED)
+target_link_libraries(你的目标 PRIVATE Common::Net::Core)
 ```
 
 ### 运行
 
-先启动服务端:
+先启动服务端（示例可执行文件位于构建目录 `examples/` 下）：
 
 ```bash
 # Windows
-cd Server/source/build && ./Debug/Server.exe
+./build/examples/Debug/Server.exe
 # Linux
-cd Server/source/build && ./Server
+./build/examples/Server
 ```
 
-再启动客户端:
+再启动客户端：
 
 ```bash
 # Windows
-cd Client/source/build && ./Debug/Client.exe
+./build/examples/Debug/Client.exe
 # Linux
-cd Client/source/build && ./Client
+./build/examples/Client
 ```
 
 ## 使用示例
@@ -391,7 +422,7 @@ std::string HttpServer::HandleVueRequest(const std::string& path, const std::str
 
 - **客户端 io_context 线程提前退出**(`Client/source/main.cpp` 的 `CreateConnection`):原代码先启动 `io_thread` 执行 `conn->io->run()`，但此时 `io_context` 中没有任何异步任务，`run()` 立即返回，线程随之结束；之后才调用 `Connect()`，导致 `async_resolve` 排入队列却无人驱动，连接永远不会建立，控制台无任何输出。已修复为先调用 `Connect()` 再启动 `io_thread`。
 
-- **Windows winsock 头文件冲突**:`winsock.h` 与 `winsock2.h` 冲突导致编译报错。已在两个 CMakeLists 中统一添加 `WIN32_LEAN_AND_MEAN` 与 `_WIN32_WINNT=0x0601` 编译宏。
+- **Windows winsock 头文件冲突**:`winsock.h` 与 `winsock2.h` 冲突导致编译报错。已在根目录 CMakeLists.txt（`common_net_options` 函数）中统一添加 `WIN32_LEAN_AND_MEAN` 与 `_WIN32_WINNT=0x0601` 编译宏，并以 `PUBLIC` 传播给所有使用者。
 
 - **Windows 控制台 UTF-8 中文乱码**:`Utils::init()` 调用 `SetConsoleOutputCP(CP_UTF8)` 设置输出代码页，CMake 添加 `/utf-8` 编译选项保证源文件按 UTF-8 解析。
 
