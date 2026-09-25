@@ -420,7 +420,7 @@ std::string HttpServer::HandleVueRequest(const std::string& path, const std::str
 
 - **构造函数参数顺序错误**(`MsgNode(int, int)`):委托构造时参数位置写反，导致 `max_len` 被传入 `-1ULL` 截断为 `-1`，触发 `max_len 必须大于 0` 错误、缓冲区未分配。已修复为 `MsgNode(-1ULL, max_len, serviceID)`。
 
-- **客户端 io_context 线程提前退出**(`Client/source/main.cpp` 的 `CreateConnection`):原代码先启动 `io_thread` 执行 `conn->io->run()`，但此时 `io_context` 中没有任何异步任务，`run()` 立即返回，线程随之结束；之后才调用 `Connect()`，导致 `async_resolve` 排入队列却无人驱动，连接永远不会建立，控制台无任何输出。已修复为先调用 `Connect()` 再启动 `io_thread`。
+- **客户端 io_context 线程提前退出**(`examples/Client/main.cpp` 的 `CreateConnection`):原代码先启动 `io_thread` 执行 `conn->io->run()`，但此时 `io_context` 中没有任何异步任务，`run()` 立即返回，线程随之结束；之后才调用 `Connect()`，导致 `async_resolve` 排入队列却无人驱动，连接永远不会建立，控制台无任何输出。已修复为先调用 `Connect()` 再启动 `io_thread`。
 
 - **Windows winsock 头文件冲突**:`winsock.h` 与 `winsock2.h` 冲突导致编译报错。已在根目录 CMakeLists.txt（`common_net_options` 函数）中统一添加 `WIN32_LEAN_AND_MEAN` 与 `_WIN32_WINNT=0x0601` 编译宏，并以 `PUBLIC` 传播给所有使用者。
 
