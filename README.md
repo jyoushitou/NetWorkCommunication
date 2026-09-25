@@ -48,24 +48,24 @@ NetWorkCommunication/
 │   ├── NetConnection.cpp    # 异步收发、字节序转换、消息解析、发送队列实现
 │   ├── Utils.h              # 日志输出工具声明
 │   └── Utils.cpp            # 日志输出工具实现
-├── Server/                  # 服务端（提交）
+├── Server/                  # 服务端库源码（提交）
 │   └── source/
-│       ├── main.cpp         # 服务端示例入口，信号处理/优雅退出/等待并回复消息/HTTP 服务器启动
 │       ├── include/
-│       │   ├── NetServer.h      # Server / Session 声明
-│       │   └── NetHttpServer.h  # HttpServer / HttpSession 声明（Vue3 前端 HTTP 接入）
+│       │   └── NetServer.h      # Server / Session 声明
 │       └── body/
-│           ├── NetServer.cpp    # accept、会话管理、线程安全消息队列、WaitForMessage
-│           └── NetHttpServer.cpp # Beast HTTP 解析、HttpServer/HttpSession 实现
-├── Client/                  # 客户端（提交）
+│           └── NetServer.cpp    # accept、会话管理、线程安全消息队列、WaitForMessage
+├── Client/                  # 客户端库源码（提交）
 │   └── source/
-│       ├── main.cpp         # 客户端示例入口，支持多连接、事件机制优雅退出
 │       ├── include/
 │       │   └── NetClient.h  # Client 声明
 │       └── body/
 │           └── NetClient.cpp # 异步连接（成员resolver）、消息回调、关闭回调
-├── examples/
-│   └── CMakeLists.txt       # Server / Client 示例可执行文件定义（复用各自 main.cpp）（提交）
+├── examples/                # 示例程序入口（提交）
+│   ├── CMakeLists.txt       # Server / Client 示例可执行文件定义
+│   ├── Server/
+│   │   └── main.cpp         # 服务端示例入口，信号处理/优雅退出/业务回调
+│   └── Client/
+│       └── main.cpp         # 客户端示例入口，支持多连接、事件机制优雅退出
 ├── cmake/
 │   └── CommonNetConfig.cmake.in  # 安装包配置模板（find_package(CommonNet) 用）（提交）
 ├── lib/                     # 预留目录：本地第三方预编译库/依赖，一般不提交
@@ -181,7 +181,6 @@ boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), 60000);
 auto server = std::make_shared<Net::Server::Server>(io, ep, ServiceID_RPCGateway);
 server->StartAccept();
 
-// 注册 Ctrl+C / Windows 控制台事件，实现优雅退出（见 main.cpp 的 OnSignal / ConsoleCtrlHandler）
 
 // 网络线程
 std::thread net_thread([&io] { io.run(); });
@@ -272,7 +271,7 @@ io_thread.join();
 
 ### 客户端多连接（14 业务服务并行）
 
-`Client/source/main.cpp` 内置了多连接架构：
+`examples/Client/main.cpp` 内置了多连接架构：
 
 - 每连接一个独立 `io_context` + 一个独立 `io_thread`（共 18 条内网连接，默认注释，可取消注释启用）
 - 连接关闭时通过 `SetCloseCallback` 统计剩余连接数，全部关闭后自动退出
@@ -308,7 +307,8 @@ constexpr int ServiceID_Pay = 18;
 每个业务服务 = 一份 `Server` 目录拷贝 + 修改 `ServiceID` + 在 `main.cpp` 的 `WaitForMessage()` 循环中编写业务逻辑：
 
 ```cpp
-// Server/source/main.cpp —— 在 TODO 注释处编写你的业务处理逻辑
+
+// examples/Server/main.cpp —— 在 TODO 注释处编写你的业务处理逻辑
 while (true) {
     auto [session, msg_id, msg] = server->WaitForMessage();
     if (!session && msg == "close") break;   // Stop() 后返回终止标记
