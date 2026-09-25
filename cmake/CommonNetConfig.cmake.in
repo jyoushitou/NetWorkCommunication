@@ -1,0 +1,15 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# CMake 4.x 已移除 FindBoost 模块：下游查找 Boost 必须走 CONFIG 模式
+# （本项目统一使用 vcpkg 提供的 BoostConfig.cmake），并显式采用 NEW 行为
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
+find_dependency(Boost CONFIG COMPONENTS system thread)
+
+include("${CMAKE_CURRENT_LIST_DIR}/CommonNetTargets.cmake")
+
+check_required_components(CommonNet)
