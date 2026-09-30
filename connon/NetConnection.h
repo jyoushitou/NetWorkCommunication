@@ -14,6 +14,27 @@
 
 namespace Net
 {
+    /// @brief      消息ID长度
+    /// @details    消息头部中消息ID所占字节数
+    /// @note
+    constexpr short HEAD_ID_LENGTH = 8;
+
+    /// @brief      消息长度长度
+    /// @details    消息头部中消息长度字段所占字节数
+    /// @note
+    constexpr short HEAD_LEN_LENGTH = 4;
+
+    /// @brief      消息头部长度
+    /// @details    消息ID、消息长度、请求服务器ID与目标服务器ID长度之和
+    /// @note
+    constexpr short HEAD_LENGTH = HEAD_ID_LENGTH + HEAD_LEN_LENGTH;
+
+    /// @brief      最大消息长度
+    /// @details    单条消息允许的最大长度（1M）
+    /// @warning    超出该长度视为非法消息
+    /// @note
+    constexpr int MAX_LENGTH = 1024 * 1024;
+
     /// @brief      消息体缓存
     /// @details    为读取发送构造逻辑层缓存
     /// @note
