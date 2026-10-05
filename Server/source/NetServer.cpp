@@ -150,10 +150,6 @@ namespace Net
             acceptor.listen();
             // 给智能指针赋值
             this->HF = HF;
-
-            // 创建监控线程
-            // clearSession 是非静态成员函数，必须显式绑定 this，否则 std::thread 无法推导可调用对象
-            clearSessionThread = std::thread(&Server::clearSession, this);
         }
 
         /// @brief      析构函数
@@ -169,6 +165,23 @@ namespace Net
             {
                 clearSessionThread.join();
             }
+        }
+
+        void Server::start()
+        {
+            // 此处一定安全
+            auto self = shared_from_this();
+            // 让清理线程有弱引用可用
+            selfWeak = self;
+
+            // 幂等保护：重复调用 StartAccept 不重复起线程
+            static std::atomic<bool> started{false};
+            bool expected = false;
+            if (started.compare_exchange_strong(expected, true))
+            {
+                clearSessionThread = std::thread(&Server::clearSession, this);
+            }
+            StartAccept();
         }
 
         /// @brief      开始接受连接
@@ -208,6 +221,7 @@ namespace Net
                                       {
                                           // 仅在服务器仍在运行时，才输出真正的 accept 错误
                                           Utils::Out::outErr("accept 错误: " + ec.what());
+                                          StartAccept();
                                       }
                                   });
         }

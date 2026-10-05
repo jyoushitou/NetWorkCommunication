@@ -13,6 +13,13 @@
 #include <iostream>
 #include <limits>
 
+/// @brief      当前服务ID的定义
+/// @details    Utils 前置库（lib/Utils.lib）的头文件里 serviceID 只有 extern 声明、
+///             库内没有给出定义，而库实现（Utils::Out::outMsg 等）会引用该符号，
+///             故按 Utils 工程自身的用法（Utils/tests/main.cpp）在程序里定义它。
+/// @warning    Utils 库内一旦补上该定义，必须删除本行，否则会重复定义（LNK2005）
+std::atomic<ServiceID> Utils::serviceID{ServiceID::Test};
+
 /// @brief 存储客户端及其运行环境
 /// @note 成员声明顺序决定析构逆序：iot -> client
 ///       必须保证 client 先于 io_context 析构，避免 socket 访问已释放的 io_context
@@ -38,6 +45,12 @@ std::vector<std::unique_ptr<boost::asio::io_context>> g_ios;
 /// @details 连接测试固定用 0，业务消息从 1 开始自增，保证每条消息 ID 唯一
 /// @note
 std::atomic<unsigned long long> g_msg_id{0};
+
+/// @brief 本地运行标志
+/// @details 新版 Utils 头文件没有对外暴露退出运行标志（旧版是 Utils::Exit::running），
+///          这里自己维护一份：退出流程启动时会回调已注册的停止函数，借此置为 false
+/// @note
+std::atomic<bool> g_running{true};
 
 /// @brief 对应业务的回调
 /// @param msg_id 消息id
@@ -88,8 +101,8 @@ int main()
     // 初始化控制台、日志目录、退出事件与信号处理（含 Ctrl+C / 关窗 / 系统关机）
     Utils::init();
 
-    // 让日志打印出正确的服务名（Utils::Out 内部使用 serviceID）
-    Utils::serviceID = ServiceID_RPCGateway;
+    // 设置当前服务ID（决定日志中的服务名）
+    Utils::serviceID = RPCGateway;
 
     // 注册优雅退出回调：收到退出信号时停止所有连接
     // 必须在创建连接前注册，且回调内遍历数组，故对后加入的连接同样生效
@@ -105,6 +118,9 @@ int main()
                 }
             }
         });
+
+    // 退出流程启动时同步本地运行标志，语义与旧版 Utils::Exit::running 一致
+    Utils::Exit::registerStopCallback([]() { g_running = false; });
 
     Utils::Out::outMsg("请输入服务器地址与端口（例如：127.0.0.1 26990）");
     Net::Client::HostPort HP;
@@ -128,7 +144,7 @@ int main()
         []()
         {
             std::string line;
-            while (Utils::Exit::running.load() && std::getline(std::cin, line))
+            while (g_running.load() && std::getline(std::cin, line))
             {
                 if (line.empty())
                 {

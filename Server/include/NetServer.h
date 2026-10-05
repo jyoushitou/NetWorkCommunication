@@ -14,6 +14,8 @@
 #include <functional>
 #include <atomic>
 #include <thread>
+#include <tuple> // std::tuple（WaitForMessage 返回值 / msgQueue 元素）
+#include <ctime> // time_t（Session::lastTime）
 
 #include <boost/asio.hpp>
 
@@ -131,11 +133,10 @@ namespace Net
             /// @note       派生类析构会自动调用基类析构
             virtual ~Server();
 
-            /// @brief      开始接受连接
-            /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
-            ///             并为每个新连接创建对应的 Session
-            /// @warning    须在 io_context 运行后调用
-            void StartAccept();
+            /// @brief 启动
+            /// @details 在启动时运行监控线程
+            /// @warning 会启动一个监控线程
+            void start();
 
             /// @brief      停止服务器
             /// @details    停止接受新连接并关闭所有会话
@@ -152,6 +153,12 @@ namespace Net
             /// @details    保存服务器使用的 io_context 引用
             /// @warning    生命周期须长于本服务器
             boost::asio::io_context& ioc;
+
+            /// @brief      开始接受连接
+            /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
+            ///             并为每个新连接创建对应的 Session
+            /// @warning    须在 io_context 运行后调用
+            void StartAccept();
 
         private:
             /// @brief      清理失效会话

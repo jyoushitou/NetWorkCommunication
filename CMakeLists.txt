@@ -32,6 +32,10 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+# 安装目录变量（CMAKE_INSTALL_INCLUDEDIR / CMAKE_INSTALL_LIBDIR）在本文件前段
+# 就会写进目标的 INSTALL_INTERFACE，故在定义目标之前先引入
+include(GNUInstallDirs)
+
 # 查找 Boost 库
 find_package(Boost CONFIG REQUIRED COMPONENTS system thread)
 
@@ -47,14 +51,89 @@ function(common_net_options target)
     endif()
 endfunction()
 
-# ── 工具库：Utils ───────────────────────────────────────
-add_library(CommonUtils
-    connon/Utils.cpp)
-common_net_options(CommonUtils)
-target_include_directories(CommonUtils PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/connon>
+# ── 工具库：Utils（前置依赖库，已由独立工程编译成库）──────
+# Utils 是本工程的前置依赖库：由独立的 Utils 工程编译成静态库后发布，
+# 本工程里只有它的发布产物——库文件与三个公开头文件
+# lib/Utils.h、lib/Message.h、lib/UtilsExport.h（该库自身依赖的三方库已并入其中）。
+# 因此这里不再编译 Utils 的源码，而是把这份「已经编译好的库」接入为库目标：
+#   CommonUtilsPrebuilt —— 预编译静态库本体（IMPORTED 静态库，构建期真正参与链接）
+#   CommonUtils         —— 对外接口目标，别名与导出名保持 Common::Utils 不变
+#
+# 关键：静态库的 .obj 里带着 /FAILIFMISMATCH 指令（RuntimeLibrary 与
+# _ITERATOR_DEBUG_LEVEL），Debug 与 Release 两份产物互不兼容——Utils.h 的 ABI 里
+# 有 std::string / std::vector<std::string> / std::function，跨 CRT 混链不只是
+# 链接器报 LNK2038，绕过去还会踩坏堆。
+# 又因为 VS 是多配置生成器：IMPORTED 目标若只设「配置无关」的 IMPORTED_LOCATION，
+# Debug 会静默退回复用 Release 那份库。所以两份产物都必须有，并按配置分别导入：
+#   UTILS_LIBRARY_RELEASE —— Release 版（MD  / _ITERATOR_DEBUG_LEVEL=0）
+#   UTILS_LIBRARY_DEBUG   —— Debug   版（MDd / _ITERATOR_DEBUG_LEVEL=2）
+# Debug 版缺失时的补救办法（在 Utils 工程自己的构建目录里执行）：
+#   cmake --build <Utils 构建目录> --config Debug --target Utils
+# 指向其他位置的同款发布包：
+#   -DUTILS_LIBRARY_RELEASE=... -DUTILS_LIBRARY_DEBUG=... -DUTILS_INCLUDE_DIR=...
+if(NOT UTILS_INCLUDE_DIR)
+    set(UTILS_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib"
+        CACHE PATH "Utils 前置依赖库头文件目录（含 Utils.h / Message.h / UtilsExport.h）")
+endif()
+
+# 兼容旧变量名：早期版本只有一个 UTILS_LIBRARY，语义等同于 Release 版
+if(UTILS_LIBRARY AND NOT UTILS_LIBRARY_RELEASE)
+    set(UTILS_LIBRARY_RELEASE "${UTILS_LIBRARY}"
+        CACHE FILEPATH "Utils 预编译静态库（Release 版）的完整路径")
+    unset(UTILS_LIBRARY CACHE)
+endif()
+
+if(NOT UTILS_LIBRARY_RELEASE)
+    set(UTILS_LIBRARY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/lib/Utils.lib"
+        CACHE FILEPATH "Utils 预编译静态库（Release 版）的完整路径")
+endif()
+if(NOT UTILS_LIBRARY_DEBUG)
+    set(UTILS_LIBRARY_DEBUG "${CMAKE_CURRENT_SOURCE_DIR}/lib/Utilsd.lib"
+        CACHE FILEPATH "Utils 预编译静态库（Debug 版）的完整路径")
+endif()
+if(NOT EXISTS "${UTILS_LIBRARY_RELEASE}")
+    message(FATAL_ERROR "未找到 Utils Release 静态库：${UTILS_LIBRARY_RELEASE}"
+        "（可用 -DUTILS_LIBRARY_RELEASE=... 指定）")
+endif()
+if(NOT EXISTS "${UTILS_INCLUDE_DIR}/Utils.h")
+    message(FATAL_ERROR "未找到 Utils 头文件：${UTILS_INCLUDE_DIR}/Utils.h（可用 -DUTILS_INCLUDE_DIR=... 指定）")
+endif()
+
+# 预编译静态库本体：按配置导入 Release / Debug 两份产物
+add_library(CommonUtilsPrebuilt STATIC IMPORTED)
+set_target_properties(CommonUtilsPrebuilt PROPERTIES
+    IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
+    IMPORTED_LOCATION_RELEASE "${UTILS_LIBRARY_RELEASE}"
+    # MinSizeRel / RelWithDebInfo 同样是 MD，与 Release 版同源，直接映射过去
+    MAP_IMPORTED_CONFIG_MINSIZEREL Release
+    MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release)
+
+if(EXISTS "${UTILS_LIBRARY_DEBUG}")
+    set_target_properties(CommonUtilsPrebuilt PROPERTIES
+        IMPORTED_LOCATION_DEBUG "${UTILS_LIBRARY_DEBUG}")
+else()
+    message(WARNING
+        "未找到 Utils 的 Debug 版静态库：${UTILS_LIBRARY_DEBUG}\n"
+        "Debug 配置将退回链接 Release 版 Utils.lib（${UTILS_LIBRARY_RELEASE}），\n"
+        "链接阶段会因 RuntimeLibrary / _ITERATOR_DEBUG_LEVEL 不一致报 LNK2038。\n"
+        "生成 Debug 版的命令（在 Utils 工程自己的构建目录里执行）：\n"
+        "    cmake --build <Utils 构建目录> --config Debug --target Utils\n"
+        "再把产出的 Debug/Utils.lib 放到上述路径，或用 -DUTILS_LIBRARY_DEBUG=<路径> 指定。")
+endif()
+
+# 对外接口目标：头文件即 lib/ 下的 Utils.h / Message.h / UtilsExport.h，按接口向下游传递
+add_library(CommonUtils INTERFACE)
+target_include_directories(CommonUtils SYSTEM INTERFACE
+    $<BUILD_INTERFACE:${UTILS_INCLUDE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/Common/Utils>)
-target_link_libraries(CommonUtils PUBLIC Boost::system Boost::thread)
+# 静态库消费方式与 Utils 工程自身的发布保持一致
+target_compile_definitions(CommonUtils INTERFACE Utils_STATIC_DEFINE)
+# 构建期链接预编译库本体；安装后按配置链接随包安装的那一份
+# （Debug → Utilsd.lib，其余 → Utils.lib）
+# （用 $<INSTALL_PREFIX> 而不是绝对路径，安装包整体搬迁后依然可用）
+target_link_libraries(CommonUtils INTERFACE
+    "$<BUILD_INTERFACE:CommonUtilsPrebuilt>"
+    "$<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_LIBDIR}/$<IF:$<CONFIG:Debug>,Utilsd.lib,Utils.lib>>")
 add_library(Common::Utils ALIAS CommonUtils)
 set_target_properties(CommonUtils PROPERTIES EXPORT_NAME Utils)
 
@@ -75,7 +154,7 @@ add_library(CommonNetServer
     Server/source/NetServer.cpp)
 common_net_options(CommonNetServer)
 target_include_directories(CommonNetServer PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Server/source/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Server/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/Common/Net/Server>)
 target_link_libraries(CommonNetServer PUBLIC CommonNetCore)
 add_library(Common::Net::Server ALIAS CommonNetServer)
@@ -86,7 +165,7 @@ add_library(CommonNetClient
     Client/source/NetClient.cpp)
 common_net_options(CommonNetClient)
 target_include_directories(CommonNetClient PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Client/source/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Client/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/Common/Net/Client>)
 target_link_libraries(CommonNetClient PUBLIC CommonNetCore)
 add_library(Common::Net::Client ALIAS CommonNetClient)
@@ -98,30 +177,46 @@ if(COMMONNET_BUILD_EXAMPLES)
 endif()
 
 # ── 安装与导出 ──────────────────────────────────────────
-include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
+# Utils 是预编译静态库：CommonUtils 只承载接口，故库本体需单独安装，
+# 这样安装后的 Common::Utils 才能链到包内真实存在的 Utils.lib
 install(TARGETS CommonUtils CommonNetCore CommonNetServer CommonNetClient
     EXPORT CommonNetTargets
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
+install(FILES "${UTILS_LIBRARY_RELEASE}"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR})
+# Debug 版单独落盘为 Utilsd.lib，与 Release 版同目录共存、互不覆盖
+if(EXISTS "${UTILS_LIBRARY_DEBUG}")
+    install(FILES "${UTILS_LIBRARY_DEBUG}"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RENAME Utilsd.lib)
+endif()
+
+# Utils 前置库的三个头文件：Message.h 被 Utils.h 直接包含，必须与 Utils.h 同目录，
+# 安装后的 Common/Utils/Utils.h 才能自包含；
+# 注意只能安装这一份——#pragma once 按路径去重，同一头文件放两处会重复定义（C2011）
 install(FILES
-    connon/Utils.h
+    ${UTILS_INCLUDE_DIR}/Utils.h
+    ${UTILS_INCLUDE_DIR}/Message.h
+    ${UTILS_INCLUDE_DIR}/UtilsExport.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/Common/Utils)
 
+# 核心头文件：使用 Common::Net::Core 时其接口会带上 Common/Utils，
+# 故 #include "Message.h" 依旧能找到上面安装的那一份
 install(FILES
-    connon/Message.h
     connon/NetConnection.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/Common/Net/Core)
 
 install(FILES
-    Server/source/include/NetServer.h
+    Server/include/NetServer.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/Common/Net/Server)
 
 install(FILES
-    Client/source/include/NetClient.h
+    Client/include/NetClient.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/Common/Net/Client)
 
 install(EXPORT CommonNetTargets

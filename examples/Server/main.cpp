@@ -11,9 +11,17 @@
 
 #include <boost/asio.hpp>
 
+#include <atomic>
 #include <memory>
 #include <thread>
 #include <string>
+
+/// @brief      当前服务ID的定义
+/// @details    Utils 前置库（lib/Utils.lib）的头文件里 serviceID 只有 extern 声明、
+///             库内没有给出定义，而库实现（Utils::Out::outMsg 等）会引用该符号，
+///             故按 Utils 工程自身的用法（Utils/tests/main.cpp）在程序里定义它。
+/// @warning    Utils 库内一旦补上该定义，必须删除本行，否则会重复定义（LNK2005）
+std::atomic<ServiceID> Utils::serviceID{ServiceID::Test};
 
 // 服务器监听端口
 constexpr int kListenPort = 26990;
@@ -21,7 +29,7 @@ constexpr int kListenPort = 26990;
 int main()
 {
     // 设置当前服务ID（决定日志中的服务名）
-    Utils::serviceID = ServiceID_RPCGateway;
+    Utils::serviceID = RPCGateway;
 
     // 初始化控制台、日志目录、退出事件与信号处理（含 Ctrl+C / 关闭窗口）
     Utils::init();
@@ -53,7 +61,7 @@ int main()
     Utils::Exit::registerStopCallback([server]() { server->Stop(); });
 
     // 开始接收连接
-    server->StartAccept();
+    server->start();
 
     Utils::Out::outMsg("服务器启动，监听端口 " + std::to_string(kListenPort) + " ...等待连接中");
 
