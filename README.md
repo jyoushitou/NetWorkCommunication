@@ -10,6 +10,7 @@
 一个基于 Boost.Asio 的 C++ 网络通讯库,采用 `io_context` 单线程事件循环模型,提供异步 TCP 收发与业务逻辑解耦的消息队列接口。
 
 ## 目的
+
 - 为WebService端的通讯模块，由于是内嵌于所有的微服务之间，故分离出此服务通讯架构
 - 同时为网络通讯留档
 - WebService链接：[WebService](https://github.com/jyoushitou/WebService)
@@ -36,6 +37,13 @@
 - CMake >= 3.16
 - C++17
 - Boost(asio / system / thread / beast)
+  - 安装：`vcpkg install boost-asio boost-system boost-thread boost-beast`
+- **Utils**：本工程的前置依赖库（日志 / 时间 / 优雅退出工具），由本机 vcpkg 的 **`utils` 端口**提供
+  - 安装：`vcpkg install utils`
+  - CMake 侧通过 `find_package(Utils CONFIG REQUIRED)` 引入导入目标 `Utils::Utils`
+  - 默认三元组 `x64-windows` 下它是动态库（`Utils.dll` + 导入库 `Utils.lib`），
+    构建时 vcpkg 会自动把 `Utils.dll` 复制到可执行文件旁（applocal），无需手工部署；
+    若改用 `x64-windows-static` 三元组，则得到静态库并自动带上 `Utils_STATIC_DEFINE`
 - vcpkg(推荐)或系统安装的 Boost（CMakeLists 自动检测 `VCPKG_ROOT`，或用 `-DCMAKE_TOOLCHAIN_FILE=...` 指定）
 
 ## 目录结构
@@ -68,8 +76,8 @@ NetWorkCommunication/
 │       └── main.cpp         # 客户端示例入口，支持多连接、事件机制优雅退出
 ├── cmake/
 │   └── CommonNetConfig.cmake.in  # 安装包配置模板（find_package(CommonNet) 用）（提交）
-├── lib/                     # 预留目录：本地第三方预编译库/依赖，一般不提交
-│                            #   （空目录 Git 不追踪，需要保留可放 lib/.gitkeep）
+├── lib/                     # 预留目录：本地第三方二进制/依赖，不提交
+│                            #   （当前构建已不再依赖它：Utils 由 vcpkg 的 utils 包提供）
 ├── build/                   # 构建产物目录（cmake -B build），不提交，已由 .gitignore 忽略
 ├── out/                     # IDE（VS/CMake 集成）输出目录，不提交，建议加入 .gitignore
 ├── CMakeLists.txt           # 根构建入口：统一生成 CommonUtils/CommonNetCore/CommonNetServer/CommonNetClient（提交）
@@ -78,7 +86,7 @@ NetWorkCommunication/
 └── README.md
 ```
 
-> **提交约定**：`connon/`、`Server/`、`Client/`、`examples/`、`cmake/`、`CMakeLists.txt`、`README.md`、`LICENSE`、`.gitignore` 为源码与构建脚本，需要提交；`build/`、`out/`、`lib/`（第三方二进制）、以及 `*.lib/*.exe/*.pdb` 等编译产物仅本地保留，不提交。
+> **提交约定**：`connon/`、`Server/`、`Client/`、`examples/`、`cmake/`、`CMakeLists.txt`、`README.md`、`LICENSE`、`.gitignore` 为源码与构建脚本，需要提交；`build/`、`out/`、`lib/`（本地第三方二进制，当前构建已不再使用）、以及 `*.lib/*.exe/*.pdb` 等编译产物仅本地保留，不提交；Utils 依赖由 vcpkg 的 `utils` 包提供，无需入库。
 
 ## 消息协议
 
@@ -92,10 +100,11 @@ NetWorkCommunication/
 
 ## 编译与运行
 
-### 使用 vcpkg 安装 Boost
+### 使用 vcpkg 安装依赖
 
 ```bash
-vcpkg install boost-asio boost-system boost-thread boost-beast
+# Utils 是本工程的前置依赖库，Boost 提供 asio / system / thread
+vcpkg install utils boost-asio boost-system boost-thread boost-beast
 ```
 
 ### 设置 vcpkg 工具链（CMakeLists 自动检测）
@@ -122,17 +131,20 @@ cmake --build build --config Debug
 
 生成的目标：
 
-| 目标                | 类型       | 说明                                                                             |
-| ------------------- | ---------- | -------------------------------------------------------------------------------- |
-| `CommonUtils`       | 静态库     | 日志/通用工具（`connon/Utils.cpp`）                                              |
-| `CommonNetCore`     | 静态库     | 协议 / 连接核心（`connon/NetConnection.cpp`），链接 `CommonUtils`                |
-| `CommonNetServer`   | 静态库     | 服务端（`Server/source/body/NetServer.cpp`），链接 `CommonNetCore`               |
-| `CommonNetClient`   | 静态库     | 客户端（`Client/source/body/NetClient.cpp`），链接 `CommonNetCore`               |
-| `Server` / `Client` | 可执行文件 | 示例程序，位于构建目录 `examples/` 下（`-DCOMMONNET_BUILD_EXAMPLES=OFF` 可关闭） |
+| 目标                | 类型       | 说明                                                                                        |
+| ------------------- | ---------- | ------------------------------------------------------------------------------------------- |
+| `CommonUtils`       | INTERFACE  | 前置依赖库 Utils 的转发目标，实际链接 vcpkg 的 `Utils::Utils`（日志 / 时间 / 优雅退出工具） |
+| `CommonNetCore`     | 静态库     | 协议 / 连接核心（`connon/NetConnection.cpp`），链接 `CommonUtils`                           |
+| `CommonNetServer`   | 静态库     | 服务端（`Server/source/NetServer.cpp`），链接 `CommonNetCore`                               |
+| `CommonNetClient`   | 静态库     | 客户端（`Client/source/NetClient.cpp`），链接 `CommonNetCore`                               |
+| `Server` / `Client` | 可执行文件 | 示例程序，位于构建目录 `examples/` 下（`-DCOMMONNET_BUILD_EXAMPLES=OFF` 可关闭）            |
 
 > **命名层级**：`Common`(大功能) → `Utils` / `Net`(小功能) → `Core` / `Server` / `Client`(具体库)。
 > **CMake 别名**（构建期别名与安装后导出名一致）：`Common::Utils`、`Common::Net::Core`、`Common::Net::Server`、`Common::Net::Client`。
 > **依赖链**：`CommonUtils` ← `CommonNetCore` ←（`CommonNetServer` / `CommonNetClient`）。
+> `CommonUtils` 本身不含实现，只是把 vcpkg 的 `Utils::Utils` 转发出去；
+> 因此 `Utils.h` / `Message.h` / `UtilsExport.h`、`Utils_STATIC_DEFINE`、`Threads::Threads`
+> 全部由该导入目标按构建形态自动下发，工程里不再手工维护任何 Utils 宏与库路径。
 
 ### 安装与在其他项目中使用
 
@@ -147,6 +159,11 @@ cmake --install build --prefix <安装目录>
 find_package(CommonNet REQUIRED)
 target_link_libraries(你的目标 PRIVATE Common::Net::Core)
 ```
+
+> 下游工程同样用 vcpkg 工具链配置（`-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`）：
+> `CommonNetConfig.cmake` 会自行 `find_dependency(Boost CONFIG)` 与 **`find_dependency(Utils CONFIG)`**，
+> 把 vcpkg 的 Boost 与 utils 包一起找回来。Utils 的库与头文件由 vcpkg 提供，
+> **不再随 CommonNet 包安装**（安装目录里只有 CommonNet 自己的三个静态库与三个头文件）。
 
 ### 运行
 
@@ -417,6 +434,10 @@ std::string HttpServer::HandleVueRequest(const std::string& path, const std::str
 8. **HTTP 服务器集成**：`HttpServer` 继承 `Server`，在同一个 `io_context` 中同时运行 TCP 二进制协议监听器与 HTTP 监听器。`HttpSession` 继承 `Session` 并重写 `Start()`，通过 Boost.Beast 的 `request_parser` 解析 HTTP 请求，解析完成后调用 `HandleVueRequest()` 处理业务并返回 JSON 响应。关闭时 `Stop()` 会同时关闭 TCP 与 HTTP 两个 acceptor。
 
 ## 已知问题与修复记录
+
+- **Utils 前置库改为消费 vcpkg 的 `utils` 包**：原先工程把 Utils 工程编出的预编译静态库（`lib/Utils.lib` + `lib/Utilsd.lib`）用 IMPORTED 目标手工接入，并自己下发 `Utils_STATIC_DEFINE`、自己安装库与头文件——产物来源与 `/MD`、`/MDd` 的匹配全靠人工维护，Debug 配置一旦缺少对应产物就会静默退回 Release 版并报 `LNK2038`。现改为 `find_package(Utils CONFIG REQUIRED)` + `Utils::Utils`：包含目录、C++17 要求、`Threads::Threads`、以及静态形态下的 `Utils_STATIC_DEFINE` 都由导入目标自动下发，Release/Debug 两份产物（`Utils.dll` / `debug/bin/Utils.dll`）按配置自动选择。`CommonUtils` 保留为 `Common::Utils` 的转发目标，三个库与下游用法不变；安装包不再携带 Utils 的库与头文件，改由 `CommonNetConfig.cmake` 中新增的 `find_dependency(Utils CONFIG)` 找回。
+
+- **`Utils::serviceID` 重复定义**（`examples/Server|Client/main.cpp`）：旧版 Utils 头文件里 `serviceID` 只有 `extern` 声明、库里没有定义，示例程序只能自己补一份 `std::atomic<ServiceID> Utils::serviceID{ServiceID::Test};`。vcpkg 的 utils 包已由 `Utils.dll` 导出该符号（`extern Utils_API std::atomic<ServiceID> serviceID;`，消费侧展开为 `dllimport`），再给出定义会直接编译报错 `C2491`（绕过去也会 `LNK2005`），故两处自定义定义均已删除，改为运行时赋值 `Utils::serviceID = RPCGateway;`。
 
 - **构造函数参数顺序错误**(`MsgNode(int, int)`):委托构造时参数位置写反，导致 `max_len` 被传入 `-1ULL` 截断为 `-1`，触发 `max_len 必须大于 0` 错误、缓冲区未分配。已修复为 `MsgNode(-1ULL, max_len, serviceID)`。
 

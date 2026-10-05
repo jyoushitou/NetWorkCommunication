@@ -13,12 +13,13 @@
 #include <iostream>
 #include <limits>
 
-/// @brief      当前服务ID的定义
-/// @details    Utils 前置库（lib/Utils.lib）的头文件里 serviceID 只有 extern 声明、
-///             库内没有给出定义，而库实现（Utils::Out::outMsg 等）会引用该符号，
-///             故按 Utils 工程自身的用法（Utils/tests/main.cpp）在程序里定义它。
-/// @warning    Utils 库内一旦补上该定义，必须删除本行，否则会重复定义（LNK2005）
-std::atomic<ServiceID> Utils::serviceID{ServiceID::Test};
+/// @brief      服务ID的存放位置说明
+/// @details    serviceID 由 vcpkg 的 utils 包（Utils.dll）定义并导出：
+///             Utils.h 里声明为 `extern Utils_API std::atomic<ServiceID> serviceID;`，
+///             使用方只要在运行时赋值即可 —— 见 main() 里的 Utils::serviceID = RPCGateway。
+/// @warning    dllimport 的导出符号禁止在消费侧再给定义：写了会直接编译报错（C2491），
+///             即便绕过也会与 Utils.dll 内的定义冲突（LNK2005）。
+///             只有回到「源码内置 / 静态库」形态时才需要在程序里补这份定义。
 
 /// @brief 存储客户端及其运行环境
 /// @note 成员声明顺序决定析构逆序：iot -> client
