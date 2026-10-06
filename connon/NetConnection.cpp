@@ -479,8 +479,19 @@ namespace Net
                               // 判断是否在发送状态，不是就启动发送，是则等待
                               if (!sending)
                               {
-                                  // 启动发送队列
-                                  doSend();
+                                  try
+                                  {
+                                      // 启动发送队列
+                                      doSend();
+                                  }
+                                  catch (boost::system::error_code ec)
+                                  {
+                                      Utils::Out::outMsg("出现错误" + ec.value());
+                                  }
+                                  catch (...)
+                                  {
+                                      Utils::Out::outMsg("未知错误");
+                                  }
                               }
                           });
     }
