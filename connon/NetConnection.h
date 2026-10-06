@@ -112,22 +112,22 @@ namespace Net
         /// @details    存储消息数据的缓冲区
         /// @warning    由本类管理，禁止外部释放
         /// @note
-        char* buf;
+        char* buf = nullptr;
 
         /// @brief      缓存数据大小
         /// @details    缓冲区的总长度
         /// @note
-        int total_len;
+        int total_len = 0;
 
         /// @brief      当前读取位置
         /// @details    当前已读取/写入到的位置
         /// @note
-        int cur_len;
+        int cur_len = 0;
 
         /// @brief      消息ID
         /// @details    消息全局唯一ID
         /// @note
-        unsigned long long msg_id;
+        unsigned long long msg_id = 0;
     };
 
     /// @brief      接收节点

@@ -136,8 +136,23 @@ namespace Net
     /// @note
     void MsgNode::clear()
     {
-        // 给所有内容赋值'\0'
-        std::memset(buf, '\0', total_len);
+        // 判断buf是否有指针，且total_len有数据
+        if (buf != nullptr)
+        {
+            // 尝试创建
+            buf = new char[total_len + 1];
+            if (buf == nullptr)
+            {
+                throw std::invalid_argument("buf创建失败");
+            }
+        }
+        else if (total_len > 0)
+        {
+            throw std::invalid_argument("total_len非法，当前total长度为" + total_len);
+        }
+
+        std::memset(buf, '\0', static_cast<std::size_t>(total_len));
+
         // 将读取指针复位
         cur_len = 0;
     }
@@ -278,7 +293,18 @@ namespace Net
 
         // 申请缓存
         recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
-        recvNode->clear();
+        try
+        {
+            recvNode->clear();
+        }
+        catch (boost::system::error_code ec)
+        {
+            Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+        }
+        catch (...)
+        {
+            Utils::Out::outErr("未知错误");
+        }
 
         // 读取数据
         boost::asio::async_read(socket, boost::asio::buffer(recvNode->getBuf(), recvNode->getTotalLen()),
@@ -356,8 +382,20 @@ namespace Net
         // 申请接收缓存
         // 使用共享指针
         recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
-        // 清理缓存
-        recvNode->clear();
+
+        try
+        {
+            // 清理缓存
+            recvNode->clear();
+        }
+        catch (boost::system::error_code ec)
+        {
+            Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+        }
+        catch (...)
+        {
+            Utils::Out::outErr("未知错误");
+        }
 
         // 接收消息
         boost::asio::async_read(socket, boost::asio::buffer(recvNode->getBuf(), recvNode->getTotalLen()),
@@ -486,11 +524,11 @@ namespace Net
                                   }
                                   catch (boost::system::error_code ec)
                                   {
-                                      Utils::Out::outMsg("出现错误" + ec.value());
+                                      Utils::Out::outErr("出现错误" + ec.value());
                                   }
                                   catch (...)
                                   {
-                                      Utils::Out::outMsg("未知错误");
+                                      Utils::Out::outErr("未知错误");
                                   }
                               }
                           });
