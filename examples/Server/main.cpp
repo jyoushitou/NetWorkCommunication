@@ -66,7 +66,22 @@ int main()
     Utils::Out::outMsg("服务器启动，监听端口 " + std::to_string(kListenPort) + " ...等待连接中");
 
     // io_context 在独立线程中运行
-    std::thread io_thread([&io]() { io.run(); });
+    std::thread io_thread(
+        [&io]()
+        {
+            try
+            {
+                io.run();
+            }
+            catch (boost::system::error_code ec)
+            {
+                Utils::Out::outMsg("网络线程出现错误" + ec.what());
+            }
+            catch (...)
+            {
+                Utils::Out::outMsg("出现未知错误");
+            }
+        });
 
     // 主线程阻塞等待退出信号
     Utils::Exit::waitExit();

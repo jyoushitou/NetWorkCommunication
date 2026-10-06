@@ -173,14 +173,8 @@ namespace Net
             auto self = shared_from_this();
             // 让清理线程有弱引用可用
             selfWeak = self;
-
-            // 幂等保护：重复调用 StartAccept 不重复起线程
-            static std::atomic<bool> started{false};
-            bool expected = false;
-            if (started.compare_exchange_strong(expected, true))
-            {
-                clearSessionThread = std::thread(&Server::clearSession, this);
-            }
+            // 创建监控线程
+            clearSessionThread = std::thread(&Server::clearSession, this);
             StartAccept();
         }
 
@@ -230,26 +224,46 @@ namespace Net
         /// @details    投递到 io_context 线程内，移除空指针会话（供监控线程调用）
         void Server::clearSession()
         {
-            // 保活：post 的 lambda 必须捕获 self，否则 Server 可能在使用前被析构
-            auto self = shared_from_this();
             // 在关闭时结束进程
-            while (running)
+            while (running.load())
             {
-                // 60s轮询
-                std::this_thread::sleep_for(std::chrono::seconds(60));
-                // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 sessions）
-                boost::asio::post(ioc,
-                                  [this, self]()
-                                  {
-                                      for (auto i : sessions)
+                {
+                    // 创建锁变量
+                    std::unique_lock<std::mutex> lock(queueMutex);
+                    // 获取运行状态
+                    if (!running.load())
+                    {
+                        break;
+                    }
+                    // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 sessions）
+                    boost::asio::post(ioc,
+                                      [this]()
                                       {
-                                          if (i->timeOut() && !i->isClosed())
+                                          for (auto i : sessions)
                                           {
-                                              i->reply(-1, "长时间未连接，已自动关闭");
-                                              i->closeSession();
+                                              if (i->timeOut() && !i->isClosed())
+                                              {
+                                                  i->reply(-1, "长时间未连接，已自动关闭");
+                                                  i->closeSession();
+                                              }
                                           }
-                                      }
-                                  });
+                                      });
+
+                    // 可被 Stop() 立即唤醒，不必再等满 60s
+                    queueCV.wait_for(lock, std::chrono::seconds(60), [this]() { return !running.load(); });
+                    if (!running.load())
+                    {
+                        break;
+                    }
+                }
+
+                // 弱引用
+                auto self = selfWeak.lock();
+                // 判断是否在西否阶段
+                if (!self)
+                {
+                    return;
+                }
             }
         }
 
