@@ -249,20 +249,22 @@ namespace Net
                                       [this]()
                                       {
                                           // 挨个检验线程
-                                          for (auto i : sessions)
-                                          {
-                                              // 判断是否超时
-                                              if (i->timeOut() && !i->isClosed())
+                                          for (auto& it : sessions)
+                                          { // 判断是否超时
+                                              if (it->timeOut() && !it->isClosed())
                                               {
-                                                  // 超时则发送断连消息
-                                                  i->toSend(-1, "长时间未发送消息，服务器将关闭");
-
+                                                  // 回复提醒消息
+                                                  it->toSend(0LL, "长时间未发送，关闭连接");
                                                   // 关闭
-                                                  i->closeSession();
-                                                  // 删除
-                                                  delete i.get();
-                                                  // 重置
-                                                  i.reset();
+                                                  it->closeSession();
+                                              }
+                                          }
+                                          // 检查是否关闭
+                                          for (auto it = sessions.begin(); it != sessions.end(); it++)
+                                          {
+                                              if ((*it)->isClosed())
+                                              {
+                                                  sessions.erase(it);
                                               }
                                           }
                                       });
