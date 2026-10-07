@@ -211,12 +211,17 @@ namespace Net
     /// @note
     void Connection::actuallyClose()
     {
-        Utils::Out::outMsg("正在关闭socket");
-
         if (!closing)
         {
             closing = true;
         }
+        else
+        {
+            Utils::Out::outMsg("已在关闭流程");
+            return;
+        }
+
+        Utils::Out::outMsg("正在关闭socket");
 
         // 关闭socket时查看错误码
         boost::system::error_code ec;
@@ -237,6 +242,8 @@ namespace Net
         {
             // 通知设为真
             closeNotified = true;
+
+            toClosed();
         }
     }
 
