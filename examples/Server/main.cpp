@@ -15,13 +15,21 @@
 #include <thread>
 #include <string>
 
+/// @brief      服务ID的存放位置说明
+/// @details    serviceID 由 vcpkg 的 utils 包（Utils.dll）定义并导出：
+///             Utils.h 里声明为 `extern Utils_API std::atomic<ServiceID> serviceID;`，
+///             使用方只要在运行时赋值即可 —— 见 main() 里的 Utils::serviceID = RPCGateway。
+/// @warning    dllimport 的导出符号禁止在消费侧再给定义：写了会直接编译报错（C2491），
+///             即便绕过也会与 Utils.dll 内的定义冲突（LNK2005）。
+///             只有回到「源码内置 / 静态库」形态时才需要在程序里补这份定义。
+
 // 服务器监听端口
 constexpr int kListenPort = 26990;
 
 int main()
 {
     // 设置当前服务ID（决定日志中的服务名）
-    Utils::serviceID = ServiceID_RPCGateway;
+    Utils::serviceID = RPCGateway;
 
     // 初始化控制台、日志目录、退出事件与信号处理（含 Ctrl+C / 关闭窗口）
     Utils::init();
@@ -53,12 +61,27 @@ int main()
     Utils::Exit::registerStopCallback([server]() { server->Stop(); });
 
     // 开始接收连接
-    server->StartAccept();
+    server->start();
 
     Utils::Out::outMsg("服务器启动，监听端口 " + std::to_string(kListenPort) + " ...等待连接中");
 
     // io_context 在独立线程中运行
-    std::thread io_thread([&io]() { io.run(); });
+    std::thread io_thread(
+        [&io]()
+        {
+            try
+            {
+                io.run();
+            }
+            catch (boost::system::error_code ec)
+            {
+                Utils::Out::outMsg("网络线程出现错误" + ec.what());
+            }
+            catch (...)
+            {
+                Utils::Out::outMsg("出现未知错误");
+            }
+        });
 
     // 主线程阻塞等待退出信号
     Utils::Exit::waitExit();

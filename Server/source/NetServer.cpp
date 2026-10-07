@@ -51,6 +51,10 @@ namespace Net
             // 获得自身指针
             auto self = getSession();
 
+            if (self == nullptr)
+            {
+            }
+
             // 存储回调函数返回的响应
             std::string sendmsg;
 
@@ -58,6 +62,7 @@ namespace Net
             if (HF != nullptr)
             {
                 sendmsg = (*HF)(self, msg);
+                return;
             }
             else
             {
@@ -71,8 +76,6 @@ namespace Net
                 Utils::Out::outMsg("回调返回空响应，跳过发送");
                 return;
             }
-
-            reply(msg_id, sendmsg);
         }
 
         /// @brief      获取自身的指针
@@ -90,7 +93,7 @@ namespace Net
         void Session::reply(unsigned long long msg_id, const std::string& msg)
         {
 
-            Utils::Out::outMsg("发送回复数据");
+            Utils::Out::outMsg("正在发送回复数据");
 
             // 发送数据
             toSend(msg_id, std::move(msg));
@@ -137,7 +140,7 @@ namespace Net
         /// @param[in] ep 监听的本地端点（地址与端口）
         /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF)
+                       std::shared_ptr<HandleFunction> HF, long long timeOut)
             : ioc(io), acceptor(io), running(true)
         {
             // 打开连接
@@ -151,9 +154,10 @@ namespace Net
             // 给智能指针赋值
             this->HF = HF;
 
-            // 创建监控线程
-            // clearSession 是非静态成员函数，必须显式绑定 this，否则 std::thread 无法推导可调用对象
-            clearSessionThread = std::thread(&Server::clearSession, this);
+            // 初始化超时时间
+            this->timeOut = timeOut;
+
+            Utils::Out::outMsg("服务器初始化完成");
         }
 
         /// @brief      析构函数
@@ -169,6 +173,18 @@ namespace Net
             {
                 clearSessionThread.join();
             }
+        }
+
+        void Server::start()
+        {
+            // 此处一定安全
+            auto self = shared_from_this();
+            // 让清理线程有弱引用可用
+            selfWeak = self;
+            // 创建监控线程
+            clearSessionThread = std::thread(&Server::clearSession, this);
+            // 启动监听
+            StartAccept();
         }
 
         /// @brief      开始接受连接
@@ -208,6 +224,7 @@ namespace Net
                                       {
                                           // 仅在服务器仍在运行时，才输出真正的 accept 错误
                                           Utils::Out::outErr("accept 错误: " + ec.what());
+                                          StartAccept();
                                       }
                                   });
         }
@@ -216,26 +233,57 @@ namespace Net
         /// @details    投递到 io_context 线程内，移除空指针会话（供监控线程调用）
         void Server::clearSession()
         {
-            // 保活：post 的 lambda 必须捕获 self，否则 Server 可能在使用前被析构
-            auto self = shared_from_this();
             // 在关闭时结束进程
-            while (running)
+            while (running.load())
             {
-                // 60s轮询
-                std::this_thread::sleep_for(std::chrono::seconds(60));
-                // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 sessions）
-                boost::asio::post(ioc,
-                                  [this, self]()
-                                  {
-                                      for (auto i : sessions)
+                {
+                    // 创建锁变量
+                    std::unique_lock<std::mutex> lock(queueMutex);
+                    // 获取运行状态
+                    if (!running.load())
+                    {
+                        break;
+                    }
+                    // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 sessions）
+                    boost::asio::post(ioc,
+                                      [this]()
                                       {
-                                          if (i->timeOut() && !i->isClosed())
-                                          {
-                                              i->reply(-1, "长时间未连接，已自动关闭");
-                                              i->closeSession();
+                                          // 挨个检验线程
+                                          for (auto& it : sessions)
+                                          { // 判断是否超时
+                                              if (it->timeOut() && !it->isClosed())
+                                              {
+                                                  // 回复提醒消息
+                                                  it->toSend(0LL, "长时间未发送，关闭连接");
+                                                  // 关闭
+                                                  it->closeSession();
+                                              }
                                           }
-                                      }
-                                  });
+                                          // 检查是否关闭
+                                          for (auto it = sessions.begin(); it != sessions.end(); it++)
+                                          {
+                                              if ((*it)->isClosed())
+                                              {
+                                                  sessions.erase(it);
+                                              }
+                                          }
+                                      });
+
+                    // 可被 Stop() 立即唤醒，不必再等满 60s
+                    queueCV.wait_for(lock, std::chrono::seconds(60), [this]() { return !running.load(); });
+                    if (!running.load())
+                    {
+                        break;
+                    }
+                }
+
+                // 弱引用
+                auto self = selfWeak.lock();
+                // 判断是否在西否阶段
+                if (!self)
+                {
+                    return;
+                }
             }
         }
 
@@ -273,31 +321,5 @@ namespace Net
                                   sessions.clear();
                               });
         }
-
-        /// @brief      阻塞等待消息
-        /// @details    主线程调用，阻塞等待一条消息
-        /// @return     消息元组 {session, msg_id, 内容}
-        /// @warning    会阻塞调用线程直至有消息到达或服务器停止
-        std::tuple<std::shared_ptr<Session>, unsigned long long, std::string> Server::WaitForMessage()
-        {
-            // 加锁
-            std::unique_lock<std::mutex> lock(queueMutex);
-
-            // 等待队列非空或停止信号
-            queueCV.wait(lock, [this]() { return !msgQueue.empty() || !running; });
-
-            // 如果是停止信号且队列为空，返回终止标记
-            if (msgQueue.empty())
-            {
-                return {nullptr, -1ULL, "close"};
-            }
-
-            // 取出队首消息
-            auto msg = std::move(msgQueue.front());
-            // 弹出队首消息
-            msgQueue.pop();
-            return msg;
-        }
-
     } // namespace Server
 } // namespace Net

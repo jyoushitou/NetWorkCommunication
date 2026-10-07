@@ -1,15 +1,19 @@
-@PACKAGE_INIT@
+@PACKAGE_INIT@  # 由 configure_package_config_file() 展开：生成 PACKAGE_PREFIX_DIR 变量与 set_and_check / check_required_components 两个宏
 
-include(CMakeFindDependencyMacro)
+include(CMakeFindDependencyMacro)  # 引入 find_dependency 宏：它比 find_package 多一层语义——找不到就把本包的 <pkg>_FOUND 置为假并立即返回，不会把下游 configure 直接打断
 
 # CMake 4.x 已移除 FindBoost 模块：下游查找 Boost 必须走 CONFIG 模式
 # （本项目统一使用 vcpkg 提供的 BoostConfig.cmake），并显式采用 NEW 行为
-if(POLICY CMP0167)
-    cmake_policy(SET CMP0167 NEW)
-endif()
+if(POLICY CMP0167)  # 仅当下游 CMake 认识这条策略时才设置
+    cmake_policy(SET CMP0167 NEW)  # NEW：强制 Boost 走 CONFIG 模式，避免下游回退到已删除的 FindBoost 模块
+endif()  # 策略设置结束
 
-find_dependency(Boost CONFIG COMPONENTS system thread)
+find_dependency(Boost CONFIG COMPONENTS system thread)  # 递归查找 Boost：下游找到 CommonNet 的同时就得到 Boost::system / Boost::thread
 
-include("${CMAKE_CURRENT_LIST_DIR}/CommonNetTargets.cmake")
+# Utils（本工程的前置依赖库）由 vcpkg 的 utils 端口提供，导入目标 Utils::Utils；
+# Common::Utils / Common::Net::* 的接口上带着它，故必须一并找回
+find_dependency(Utils CONFIG)  # 递归查找 vcpkg 的 utils 包：缺了它，导出的 Common::Utils 会因 Utils::Utils 未定义而导致下游 configure 失败
 
-check_required_components(CommonNet)
+include("${CMAKE_CURRENT_LIST_DIR}/CommonNetTargets.cmake")  # 载入导出目标（Common::Utils / Common::Net::Core / Server / Client）；必须放在上面两句 find_dependency 之后
+
+check_required_components(CommonNet)  # 校验下游 COMPONENTS 请求：本包无可选组件，一旦请求组件就把 CommonNet_FOUND 置为假
