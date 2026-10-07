@@ -126,7 +126,8 @@ namespace Net
             /// @param[in] io 服务器的io_context
             /// @param[in] ep 监听的本地端点（地址与端口）
             /// @warning    须保证 io 的生命周期长于本服务器
-            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF);
+            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
+                   long long timeOut);
 
             /// @brief      析构函数
             /// @details    先停止服务器并回收清理线程，避免线程析构时未 join 触发 terminate
@@ -142,11 +143,6 @@ namespace Net
             /// @details    停止接受新连接并关闭所有会话
             /// @warning    调用后服务器不再接受新连接，须重新构造使用
             virtual void Stop();
-
-            /// @brief      阻塞等待消息
-            /// @details    主线程调用，阻塞等待一条消息
-            /// @return     消息元组 {session, msg_id, 内容}
-            std::tuple<std::shared_ptr<Session>, unsigned long long, std::string> WaitForMessage();
 
         protected:
             /// @brief      所属的 io_context
@@ -173,10 +169,6 @@ namespace Net
             /// @details    管理所有已建立的连接会话
             /// @warning    Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
             std::vector<std::shared_ptr<Session>> sessions;
-
-            /// @brief      消息队列
-            /// @details    IO线程生产、主线程消费的消息队列
-            std::queue<std::tuple<std::shared_ptr<Session>, unsigned long long, std::string>> msgQueue;
 
             /// @brief      队列互斥锁
             /// @details    保护消息队列的互斥锁
@@ -205,7 +197,7 @@ namespace Net
 
             /// @brief 超时时间
             /// @details
-            long long timeOut;
+            long long timeOut = 60;
         };
     } // namespace Server
 } // namespace Net
