@@ -337,8 +337,7 @@ namespace Net
                                     // 判断传入数据是否正确
                                     if (msg_len > MAX_LENGTH || msg_len <= 0)
                                     {
-                                        Utils::Out::outErr("收到的消息的长度错误，请修复后重连");
-                                        close();
+                                        Utils::Out::outErr("收到的消息的长度错误，请修复后重试");
                                         return;
                                     }
 
@@ -383,6 +382,7 @@ namespace Net
         // 使用共享指针
         recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
 
+        // 尝试先清理,避免因为之前的缓存影响
         try
         {
             // 清理缓存
@@ -455,10 +455,15 @@ namespace Net
     /// @note
     void Connection::toSend(unsigned long long msg_id, const std::string& msg)
     {
-        if (msg_id < 0 || msg.size() == 0 || msg.size() > MAX_LENGTH)
+        if (msg.empty())
         {
-            throw std::invalid_argument("msg_id非法或者要发送的消息错误");
+            throw std::invalid_argument("禁止发送空消息");
         }
+        else if (msg.size() > static_cast<std::size_t>(MAX_LENGTH))
+        {
+            throw std::invalid_argument("消息体过长，最长为" + std::to_string(MAX_LENGTH) + "字节");
+        }
+
         // 加入发送队列
         send(msg_id, msg);
     }

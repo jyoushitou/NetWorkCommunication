@@ -35,8 +35,6 @@ namespace Net
     /// @note
     constexpr int MAX_LENGTH = 1024 * 1024;
 
-    constexpr int MAX_BODY_LENGTH = MAX_LENGTH - HEAD_LENGTH;
-
     /// @brief      消息体缓存
     /// @details    为读取发送构造逻辑层缓存
     /// @note

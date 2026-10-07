@@ -17,10 +17,49 @@ endif() # 工具链探测结束
 
 set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "使用 vcpkg classic 已安装依赖" FORCE) # 关闭 manifest 模式：本项目用 vcpkg classic（vcpkg install 装到全局 installed/<triplet>），不引入 vcpkg.json
 
+# ── 默认目标平台：固定 x64 ──────────────────────────────
+# 本工程必须编成 64 位：vcpkg 只装了 x64-windows 三元组，Boost / Utils 都是 x64 产物，
+# 下游（WebServer 等）同样是 x64。一旦编成 Win32(x86)，链接期会撞上
+# LNK1112「模块计算机类型与目标计算机类型冲突」，而报错现场离原因很远，排查成本高。
+#
+# 所以在第一次 project() 之前把平台钉成 x64（此变量必须早于 project() 才生效）：
+#   - Visual Studio 生成器：等价于命令行 -A x64。不写这一句时默认平台随 CMake 版本走，
+#     老版本（本项目声明的最低 3.16）默认是 Win32，换机器 / 换 CMake 就可能悄悄变成 32 位。
+#   - Ninja / Makefiles：该变量对它们无效，架构由启动 shell 的环境决定，
+#     因此另有 project() 之后的兜底校验（见下）。
+# 只在调用方没有显式指定平台时才填默认值：传了 -A / -DCMAKE_GENERATOR_PLATFORM=... 就以调用方为准，
+# 非 x64 的情形再由下面的架构校验收口。
+if(CMAKE_GENERATOR MATCHES "^Visual Studio" AND NOT CMAKE_GENERATOR_PLATFORM) # 仅 VS 生成器、且调用方没有用 -A 显式指定平台时才填默认值
+    set(CMAKE_GENERATOR_PLATFORM x64) # 必须是「普通变量」：命令行 -A 会把同名 cache 条目预先建成 INTERNAL，此时 set(... CACHE STRING ...) 是空操作（已实测无效），普通变量才能真正改变生成器平台
+endif() # 平台默认值设置结束
+
 project(NetWorkCommunication # 声明工程：确定 PROJECT_NAME / PROJECT_VERSION，并触发编译器探测
     VERSION 1.0.0 # 版本号：会写进 CommonNetConfigVersion.cmake，供下游 find_package(CommonNet 1.0) 做兼容判断
     DESCRIPTION "Boost.Asio based C++ network communication library" # 工程描述，仅作文档用途
     LANGUAGES CXX) # 只启用 C++：纯 C++ 工程，不必让 CMake 额外探测 C 编译器
+
+# ── 目标架构兜底校验（默认只放行 x64）────────────────────
+# 两条路径都可能悄悄编出非 x64 产物，而 CMake 全程不报错：
+#   VS 生成器        ：-A Win32 / -A ARM64
+#   Ninja / Makefiles：架构完全由启动 shell 的环境决定 ——
+#                      "Developer Command Prompt"（vcvars32）-> x86 ✗
+#                      "x64 Native Tools Command Prompt"（vcvars64）-> x64 ✓
+# 直到链接 vcpkg 的 x64 库时才炸 LNK1112，现场离原因很远。
+# 故在 project() 探测完平台后立即校验，把问题挡在编译之前。
+option(COMMONNET_ALLOW_NON_X64 "允许非 x64 架构（x86 / ARM64）构建；默认关闭，仅当依赖也换成对应架构时才需要打开" OFF) # 逃生开关：确实要别的架构时用 -DCOMMONNET_ALLOW_NON_X64=ON
+if(NOT COMMONNET_ALLOW_NON_X64) # 默认只放行 x64
+    if(CMAKE_VS_PLATFORM_NAME AND NOT CMAKE_VS_PLATFORM_NAME STREQUAL "x64") # VS 生成器：平台名直接反映 -A 的结果（空表示不是 VS 生成器）
+        message(FATAL_ERROR "检测到非 x64 平台（CMAKE_VS_PLATFORM_NAME=${CMAKE_VS_PLATFORM_NAME}），但本工程默认只构建 x64。" # 立刻失败，别等链接期
+            "\n  * 重新配置时不传 -A（本工程默认 x64），或显式 -A x64"
+            "\n  * 若该构建目录是旧的非 x64 缓存：删掉整个目录后重新配置（生成器平台一旦写进缓存就无法原地改）"
+            "\n  * 确实需要该架构：加 -DCOMMONNET_ALLOW_NON_X64=ON（注意 vcpkg 需另装对应架构的三元组）")
+    elseif(NOT CMAKE_SIZEOF_VOID_P EQUAL 8) # Ninja / Makefiles：无法感知平台名，只能按指针宽度判断（4 字节 = 32 位）
+        message(FATAL_ERROR "检测到 32 位目标（CMAKE_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}），但本工程默认只构建 x64。" # 立刻失败，别等链接期
+            "\n  * Ninja / Makefiles    ：改用 \"x64 Native Tools Command Prompt for VS\"（vcvars64），不要用 32 位的命令提示符"
+            "\n  * Visual Studio 生成器：不传 -A（本工程默认 x64），或显式 -A x64"
+            "\n  * 确实需要 32 位       ：加 -DCOMMONNET_ALLOW_NON_X64=ON（注意 vcpkg 需另装 x86-windows 三元组）")
+    endif() # 架构判断结束
+endif() # 架构校验结束
 
 # ── 构建选项 ────────────────────────────────────────────
 option(COMMONNET_BUILD_EXAMPLES "构建 Server/Client 示例可执行文件" ON) # 开关：默认编译 examples 下的 Server / Client 示例，可用 -DCOMMONNET_BUILD_EXAMPLES=OFF 关闭
@@ -119,6 +158,52 @@ target_include_directories(CommonNetClient PUBLIC # PUBLIC：NetClient.h 是公�
 target_link_libraries(CommonNetClient PUBLIC CommonNetCore) # 依赖核心库（PUBLIC，语义同上）
 add_library(Common::Net::Client ALIAS CommonNetClient) # 构建期别名
 set_target_properties(CommonNetClient PROPERTIES EXPORT_NAME Net::Client) # 导出名 Net::Client → 下游即 Common::Net::Client
+
+# ── 构建期头文件交付：把公开头文件同步到 .lib 同级目录 ──────────
+# 让构建产物目录本身就是一个「lib + include」齐备、可直接被其他工程引用的交付目录，
+# 不必先 install 再取用；install 规则保持不变（两者互不影响）。
+#
+# 为什么用 $<TARGET_FILE_DIR:...> 而不是写死 ${CMAKE_BINARY_DIR}：
+#   .lib 的落地目录随生成器而变（本机实测）：
+#       Ninja / Makefiles（单配置）  ->  <构建目录>/              例如 out/build/x64-Debug/
+#       Visual Studio（多配置）      ->  <构建目录>/<配置>/        例如 build/Debug/
+#   该生成器表达式在两种生成器下都指向 .lib 的真实目录，
+#   于是 include/ 始终与 .lib 同级，换生成器不必改配置。
+#
+# 为什么两种目录结构各放一份：
+#   include/NetServer.h                    -> 下游只加一个 -I<lib>/include 即可（三个头文件名互不冲突）
+#   include/Common/Net/Server/NetServer.h  -> 与 install 后的 INSTALL_INTERFACE 布局完全一致
+#
+# 为什么挂在 ALL 自定义目标上、而不是库的 POST_BUILD：
+#   POST_BUILD 只在库被重新链接时才触发；而只改头文件（注释、默认参数）时库未必重新链接，
+#   副本就会悄悄过期 —— 这正是先前 IntelliSense 解析到旧 NetConnection.h 的成因。
+#   这里每次构建都参与同步，配合 copy_if_different 只在内容真正变化时写盘，
+#   既不漏同步，也不会因时间戳刷新导致下游无谓重编。
+#
+# 注意：Utils.h / Message.h / UtilsExport.h 属于 vcpkg 的 utils 包，不在此复制，
+#       其包含目录仍由 Utils::Utils 导入目标提供。
+set(COMMONNET_PUBLIC_HEADERS # 公开头文件清单：<源文件相对路径>|<安装用子目录>（用 | 分隔，避开 CMake 列表的 ; 语义）
+    "connon/include/NetConnection.h|Common/Net/Core" # 核心库头文件
+    "Server/include/NetServer.h|Common/Net/Server" # 服务端库头文件
+    "Client/include/NetClient.h|Common/Net/Client") # 客户端库头文件
+
+set(COMMONNET_STAGE_INCLUDEDIR "$<TARGET_FILE_DIR:CommonNetCore>/include") # 交付目录：与 .lib 同级
+set(COMMONNET_STAGE_COMMANDS) # 累积同步命令（下面按头文件逐条追加）
+foreach(header_entry IN LISTS COMMONNET_PUBLIC_HEADERS) # 遍历三个公开头文件
+    string(REPLACE "|" ";" header_fields "${header_entry}") # 拆成「源路径 / 子目录」两段
+    list(GET header_fields 0 header_rel) # 形如 connon/include/NetConnection.h
+    list(GET header_fields 1 header_subdir) # 形如 Common/Net/Core
+    get_filename_component(header_name "${header_rel}" NAME) # 取文件名，形如 NetConnection.h
+    list(APPEND COMMONNET_STAGE_COMMANDS # 追加该头文件的同步命令：建分层子目录 + 写两份副本
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${COMMONNET_STAGE_INCLUDEDIR}/${header_subdir}" # 平铺那份落在 include/ 根（复制时自动创建），这里补的是分层子目录
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/${header_rel}" "${COMMONNET_STAGE_INCLUDEDIR}/${header_name}" # 平铺副本：include/<文件名>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/${header_rel}" "${COMMONNET_STAGE_INCLUDEDIR}/${header_subdir}/${header_name}") # 分层副本：include/<子目录>/<文件名>
+endforeach() # 头文件清单遍历结束
+
+add_custom_target(CommonNetStageHeaders ALL # ALL：纳入默认构建，每次构建做一次同步检查
+    ${COMMONNET_STAGE_COMMANDS} # 上面累积的复制命令
+    COMMENT "同步公开头文件到 .lib 同级的 include/（平铺 + 分层各一份）" # 构建时打印的一行说明
+    VERBATIM) # VERBATIM：参数原样传递，避免路径中的空格/分号被额外解释
 
 # ── 示例可执行文件 ──────────────────────────────────────
 if(COMMONNET_BUILD_EXAMPLES) # 开关打开时才进入子目录
