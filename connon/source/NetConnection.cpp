@@ -137,7 +137,7 @@ namespace Net
     void MsgNode::clear()
     {
         // 判断buf是否有指针，且total_len有数据
-        if (buf != nullptr)
+        if (buf == nullptr)
         {
             // 尝试创建
             buf = new char[total_len + 1];
@@ -145,6 +145,9 @@ namespace Net
             {
                 throw std::invalid_argument("buf创建失败");
             }
+        }
+        else if (total_len == 0)
+        {
         }
         else if (total_len > 0)
         {
