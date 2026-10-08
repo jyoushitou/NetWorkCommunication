@@ -69,13 +69,6 @@ namespace Net
                 Utils::Out::outErr("未设置消息回调函数，忽略本次消息");
                 return;
             }
-
-            // 空消息会导致 toSend 抛出异常（toSend 禁止空串），这里直接跳过
-            if (sendmsg.empty())
-            {
-                Utils::Out::outMsg("回调返回空响应，跳过发送");
-                return;
-            }
         }
 
         /// @brief      获取自身的指针
@@ -92,6 +85,11 @@ namespace Net
         /// @warning    禁止在回调或事件循环中长时间阻塞
         void Session::reply(unsigned long long msg_id, const std::string& msg)
         {
+            if (msg.empty() || msg_id < 0)
+            {
+                Utils::Out::outErr("消息为空或者消息id错误");
+                return;
+            }
 
             Utils::Out::outMsg("正在发送回复数据");
 
