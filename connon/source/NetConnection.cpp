@@ -56,24 +56,25 @@ namespace Net
     {
         // 将buf指针置空
         buf = nullptr;
-        // 设置目标值
-        total_len = 0;
         // 设置当前值
         cur_len = 0;
         // 设置消息ID
         this->msg_id = msg_id;
 
+        // 计算出缓存空间
+        total_len = max_len;
+
         // 防御性检查：max_len 必须为正数
         if (max_len <= 0)
         {
-            Utils::Out::outErr("MsgNode: max_len 必须大于 0");
-            return;
+            throw std::invalid_argument("MsgNode: max_len 必须大于 0 ,当前total_len值为" + total_len);
         }
-
-        // 计算出缓存空间
-        total_len = max_len;
         // 申请缓存
         buf = new char[total_len + 1];
+
+        // 初始化开辟的空间
+        std::memset(buf, '\0', static_cast<std::size_t>(total_len));
+
         // 给最后一个空间为'\0'避免超出空间
         buf[total_len] = '\0';
     }
@@ -139,15 +140,7 @@ namespace Net
         // 判断buf是否有指针，且total_len有数据
         if (buf == nullptr)
         {
-            // 尝试创建
-            buf = new char[total_len + 1];
-            if (buf == nullptr)
-            {
-                throw std::invalid_argument("buf创建失败");
-            }
-        }
-        else if (total_len == 0)
-        {
+            throw std::invalid_argument("buf为悬空指针，请重新创建");
         }
         else if (total_len > 0)
         {
