@@ -303,10 +303,12 @@ namespace Net
         catch (boost::system::error_code ec)
         {
             Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+            return;
         }
         catch (...)
         {
             Utils::Out::outErr("未知错误");
+            return;
         }
 
         // 读取数据
@@ -394,10 +396,12 @@ namespace Net
         catch (boost::system::error_code ec)
         {
             Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+            return;
         }
         catch (...)
         {
             Utils::Out::outErr("未知错误");
+            return;
         }
 
         // 接收消息
