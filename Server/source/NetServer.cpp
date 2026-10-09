@@ -133,12 +133,25 @@ namespace Net
 
         //===Server===
         /// @brief      构造函数
+        /// @details    服务器的构造
+        /// @param[in] io 服务器的io_context
+        /// @param[in] ep 监听的本地端点（地址与端口）
+        /// @param[in] HF 业务处理回调（返回值作为回复内容发回客户端）
+        /// @param[in] timeOut 会话空闲超时时间（秒），默认 60 秒
+        /// @warning    须保证 io 的生命周期长于本服务器
+        Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
+                       std::shared_ptr<HandleFunction> HF, long long timeOut = 5)
+            : Server(io, ep, HF, timeOut, 60)
+        {
+        }
+
+        /// @brief      构造函数
         /// @details    服务器的构造，完成 acceptor 的 open / set_option / bind / listen
         /// @param[in] io 服务器的io_context
         /// @param[in] ep 监听的本地端点（地址与端口）
         /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF, long long timeOut)
+                       std::shared_ptr<HandleFunction> HF, long long timeOut, time_t checkTime)
             : ioc(io), acceptor(io), running(true)
         {
             // 打开连接
@@ -154,6 +167,8 @@ namespace Net
 
             // 初始化超时时间
             this->timeOut = timeOut;
+            // 初始化检查周期
+            this->checkTime = checkTime;
 
             Utils::Out::outMsg("服务器初始化完成");
         }
@@ -237,51 +252,64 @@ namespace Net
                 {
                     // 创建锁变量
                     std::unique_lock<std::mutex> lock(queueMutex);
+
                     // 获取运行状态
                     if (!running.load())
                     {
                         break;
                     }
-                    // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 sessions）
-                    boost::asio::post(ioc,
-                                      [this]()
-                                      {
-                                          // 挨个检验线程
-                                          for (auto& it : sessions)
-                                          { // 判断是否超时
-                                              if (it->timeOut() && !it->isClosed())
-                                              {
-                                                  // 回复提醒消息
-                                                  it->toSend(0LL, "长时间未发送，关闭连接");
-                                                  // 关闭
-                                                  it->closeSession();
-                                              }
-                                          }
-                                          // 检查是否关闭
-                                          for (auto it = sessions.begin(); it != sessions.end(); it++)
-                                          {
-                                              if ((*it)->isClosed())
-                                              {
-                                                  sessions.erase(it);
-                                              }
-                                          }
-                                      });
 
-                    // 可被 Stop() 立即唤醒，不必再等满 60s
-                    queueCV.wait_for(lock, std::chrono::seconds(60), [this]() { return !running.load(); });
+                    // 先在锁内等一轮；被 Stop() 唤醒时立即退出，不必等满周期
+                    queueCV.wait_for(lock, std::chrono::seconds(checkTime), [this]() { return !running.load(); });
                     if (!running.load())
                     {
                         break;
                     }
                 }
 
-                // 弱引用
+                // 获取其保活指针
                 auto self = selfWeak.lock();
-                // 判断是否在西否阶段
                 if (!self)
                 {
                     return;
                 }
+                // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 sessions）
+                boost::asio::post(ioc,
+                                  [this, self]()
+                                  {
+                                      // 挨个检验线程
+                                      for (auto& it : sessions)
+                                      { // 判断是否超时
+                                          if (it->timeOut() && !it->isClosed())
+                                          {
+                                              try
+                                              {
+                                                  // 回复提醒消息
+                                                  it->toSend(0LL, "长时间未发送，关闭连接");
+                                              }
+                                              catch (boost::system::error_code ec)
+                                              {
+                                                  Utils::Out::outErr("发送关闭消息出现了错误" + ec.value());
+                                              }
+                                              catch (...)
+                                              {
+                                                  Utils::Out::outErr("未知错误");
+                                              }
+                                              // 关闭
+                                              it->closeSession();
+                                          }
+                                      }
+
+                                      // 检查是否关闭
+                                      for (auto it = sessions.begin(); it != sessions.end();)
+                                      {
+                                          if ((*it)->isClosed())
+                                          {
+                                              // 避免悬空的迭代器
+                                              it = sessions.erase(it);
+                                          }
+                                      }
+                                  });
             }
         }
 
