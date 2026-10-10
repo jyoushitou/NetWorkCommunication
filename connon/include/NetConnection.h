@@ -211,20 +211,15 @@ namespace Net
         ~Connection() = default;
 
     protected:
-        /// @brief      关闭连接
+        /// @brief 关闭函数，派生类重写
+        /// @details
+        virtual void toClosed() {};
+
+        /// @brief      connection连接的正常关闭连接
         /// @details    向 IO 线程投递关闭请求，允许外部线程调用
         /// @warning    异步执行，调用后连接不再可用
         /// @note
-        void close();
-
-        /// @brief 关闭函数，派生类重写
-        virtual void toClosed() {};
-
-        /// @brief      关闭socket
-        /// @details    关闭socket并处理发送队列，IO线程内调用
-        /// @warning    内部使用，禁止外部直接调用
-        /// @note       使用前一定要清空所有的发送
-        void actuallyClose();
+        void conectionClose();
 
         /// @brief      存储socket
         /// @details    连接使用的TCP socket
@@ -253,6 +248,17 @@ namespace Net
         boost::asio::io_context& ioc;
 
     private:
+        /// @brief 出错时调用此函数
+        /// @details 错误时直接清理消息队列，不再发送完毕后发送
+        /// @warning 调用后连接不可用，且不会发送通知消息
+        virtual void errToClosed();
+
+        /// @brief      只关闭socket
+        /// @details    关闭socket，并调用最后的虚函数
+        /// @warning    内部使用，禁止外部直接调用
+        /// @note       使用前一定要清空所有的发送
+        void actuallyClose();
+
         /// @brief      发送消息到发送队列
         /// @details    把消息封装为发送任务并加入发送队列，线程安全，可在外部线程调用
         /// @param[in] msg_id 消息全局唯一ID

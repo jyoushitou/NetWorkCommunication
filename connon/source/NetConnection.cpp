@@ -247,7 +247,7 @@ namespace Net
     /// @details    向 IO 线程投递关闭请求，API 允许外部线程调用
     /// @warning    异步执行，调用后连接不再可用
     /// @note
-    void Connection::close()
+    void Connection::conectionClose()
     {
         Utils::Out::outMsg("正在关闭Session");
 
