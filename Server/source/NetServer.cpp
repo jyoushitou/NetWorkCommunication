@@ -152,7 +152,7 @@ namespace Net
         /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
                        std::shared_ptr<HandleFunction> HF, long long timeOut, time_t checkTime)
-            : ioc(io), acceptor(io), running(true)
+            : ioc(io), acceptor(io)
         {
             // 打开连接
             acceptor.open(ep.protocol());
@@ -190,6 +190,13 @@ namespace Net
 
         void Server::start()
         {
+            if (running)
+            {
+                Utils::Out::outMsg("服务器已经在运行监听了");
+                return;
+            }
+            running = true;
+
             // 此处一定安全
             auto self = shared_from_this();
             // 让清理线程有弱引用可用

@@ -343,7 +343,9 @@ namespace Net
                                     if (msg_len > MAX_LENGTH || msg_len <= 0)
                                     {
                                         Utils::Out::outErr("收到的消息的长度错误，请修复后重试");
-                                        return;
+
+                                        // 消息错误，直接重新等待新的
+                                        readHead();
                                     }
 
                                     Utils::Out::outMsg("解析完成！ID：" + std::to_string(msg_id) + "，长度：" +
