@@ -334,8 +334,8 @@ namespace Net
             // 唤醒主线程，让它退出等待
             queueCV.notify_all();
 
-            // 保活
-            auto self = shared_from_this();
+            // 保活，不保存引用
+            auto self = selfWeak.lock();
             // 跨线程输入
             boost::asio::post(ioc,
                               [this, self]()
