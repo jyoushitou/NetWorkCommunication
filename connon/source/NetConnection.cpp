@@ -15,6 +15,15 @@
 
 extern int Service_ID;
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h> // htonl / ntohl
+#else
+#include <arpa/inet.h> // htonl / ntohl
+#endif
+
 namespace Net
 {
     /// @brief      64位主机字节序转网络字节序
