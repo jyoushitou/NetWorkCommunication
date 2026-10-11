@@ -194,6 +194,16 @@ namespace Net
         /// @note
         virtual void start();
 
+        /// @brief      析构函数
+        /// @details    采用默认析构
+        /// @note
+        ~Connection() = default;
+
+    protected:
+        /// @brief 更新时间
+        /// @note 可以重写此函数实现时间的更新
+        virtual void updateTime() {};
+
         /// @brief 后期转到具体业务
         /// @param msg_id 消息id
         /// @param msg 消息体
@@ -201,16 +211,6 @@ namespace Net
         /// @note
         virtual void recvToWork(const unsigned long long msg_id, std::string msg) = 0;
 
-        /// @brief 更新时间
-        /// @note 可以重写此函数实现时间的更新
-        virtual void updateTime() {};
-
-        /// @brief      析构函数
-        /// @details    采用默认析构
-        /// @note
-        ~Connection() = default;
-
-    protected:
         /// @brief 关闭函数，派生类必须重写
         /// @details
         virtual void derivedToClose() = 0;

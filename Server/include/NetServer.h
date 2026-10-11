@@ -95,6 +95,7 @@ namespace Net
 
             /// @brief 重写关闭最后的流程
             /// @details 用于在session最后关闭时销毁其他动态数据
+            /// @warning 当前是空实现，因为没有动态资源的实现
             void derivedToClose() override;
 
             /// @brief      获取自身的指针
@@ -112,7 +113,7 @@ namespace Net
 
             /// @brief 最后更新时间
             /// @details 记录最后更新的时间
-            time_t lastTime;
+            std::atomic<time_t> lastTime;
 
             /// @brief 记录超时时间
             long long timeout;

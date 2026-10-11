@@ -55,18 +55,25 @@ namespace Net
             {
             }
 
-            // 存储回调函数返回的响应
-            std::string sendmsg;
+            if (msg == "EXIT")
+            {
+                // 收到退出信号
+                // 关闭这次会话，最后析构交给Server的监控线程
+                closeSession();
+                return;
+            }
 
             // 判断是否获得了回调函数指针
             if (HF != nullptr)
             {
-                sendmsg = (*HF)(self, msg);
+                // HF必须要可以有回复消息
+                (*HF)(self, msg);
                 return;
             }
             else
             {
-                Utils::Out::outErr("未设置消息回调函数，忽略本次消息");
+                Utils::Out::outErr("未设置消息回调函数！");
+                closeSession();
                 return;
             }
         }
@@ -101,10 +108,13 @@ namespace Net
         /// @details    用于正常的关闭session连接，供服务器关闭线程调用
         void Session::closeSession()
         {
+            stop = true;
             // 使用基类的关闭函数
             stopToClose();
         }
 
+        /// @brief 重写关闭最后的流程
+        /// @details 用于在session最后关闭时销毁其他动态数据
         void Session::derivedToClose()
         {
         }
@@ -335,6 +345,7 @@ namespace Net
                 // 标记停止
                 running = false;
             }
+
             // 唤醒主线程，让它退出等待
             queueCV.notify_all();
 
