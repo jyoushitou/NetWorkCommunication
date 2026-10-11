@@ -238,7 +238,7 @@ namespace Net
         /// @brief      关闭状态
         /// @details    判断当前是否处于关闭流程
         /// @note
-        bool closing;
+        std::atomic<bool> closing;
 
         /// @brief      关闭通知标记
         /// @details    防止 socketClose 重复触发回调
