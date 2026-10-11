@@ -238,6 +238,9 @@ namespace Net
         }
     }
 
+    /// @brief 正常退出时调用此函数
+    /// @details 正常退出时直接清理消息队列，发送完毕后关闭
+    /// @warning 调用后连接不可用，会发送通知消息
     void Connection::stopToClose()
     {
         if (closing)
@@ -288,6 +291,15 @@ namespace Net
                                   doSend();
                               }
                           });
+    }
+
+    /// @brief 出错时调用此函数
+    /// @details 错误时直接清理消息队列，不再发送完毕后关闭
+    /// @warning 调用后连接不可用，且不会发送通知消息
+    void Connection::errToClose()
+    {
+        // 调用socket直接关闭
+        socketClose();
     }
 
     /// @brief      读取头部
