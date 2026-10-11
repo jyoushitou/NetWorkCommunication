@@ -211,8 +211,9 @@ namespace Net
         /// @note
         virtual void recvToWork(const unsigned long long msg_id, std::string msg) = 0;
 
-        /// @brief 关闭函数，派生类必须重写
+        /// @brief 关闭函数，重写
         /// @details
+        /// @warning 目前为空实现
         virtual void derivedToClose() = 0;
 
         /// @brief 正常退出时调用此函数

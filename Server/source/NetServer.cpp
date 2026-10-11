@@ -73,6 +73,7 @@ namespace Net
             else
             {
                 Utils::Out::outErr("未设置消息回调函数！");
+
                 closeSession();
                 return;
             }

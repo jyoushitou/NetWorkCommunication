@@ -21,6 +21,13 @@ namespace Net
             Connection::start();
         }
 
+        /// @brief 获取端口和ip
+        /// @return 返回hostport结构体
+        HostPort Client::getHostPort()
+        {
+            return HP;
+        }
+
         /// @brief      构造函数
         /// @details    唯一的构造函数
         /// @param[in] io 保存会话的io_context
@@ -61,7 +68,6 @@ namespace Net
                     {
                         Utils::Out::outErr("解析地址失败: " + ec.what());
                         // 通知主线程退出，防止 WaitForMessage 永久阻塞
-                        close();
                         return;
                     }
 
@@ -79,7 +85,6 @@ namespace Net
                             if (ec_conect)
                             {
                                 Utils::Out::outErr("连接失败: " + ec_conect.what());
-                                close();
                                 return;
                             }
 
@@ -106,14 +111,17 @@ namespace Net
             }
         }
 
+        void Client::derivedToClose()
+        {
+        }
+
         /// @brief      停止函数
         /// @details    从外部线程安全调用，向 IO 线程投递关闭请求，不丢弃已收到的消息
         /// @warning    异步执行，调用后连接不再可用
         /// @note
         void Client::Stop()
         {
-            // 基类 close() 内部 post 到 IO 线程，线程安全
-            close();
+            stopToClose();
         }
 
     } // namespace Client
