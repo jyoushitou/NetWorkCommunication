@@ -223,7 +223,7 @@ namespace Net
         /// @brief 出错时调用此函数
         /// @details 错误时直接清理消息队列，不再发送完毕后关闭
         /// @warning 调用后连接不可用，且不会发送通知消息
-        virtual void errToClose();
+        void errToClose();
 
         /// @brief      存储socket
         /// @details    连接使用的TCP socket

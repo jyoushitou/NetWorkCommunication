@@ -298,6 +298,9 @@ namespace Net
     /// @warning 调用后连接不可用，且不会发送通知消息
     void Connection::errToClose()
     {
+        // 清理所有的发送队列
+        sendQueue.clear();
+
         // 调用socket直接关闭
         socketClose();
     }
