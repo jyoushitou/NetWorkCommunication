@@ -98,11 +98,15 @@ namespace Net
         }
 
         /// @brief      关闭函数
-        /// @details    用于关闭session连接，供服务器关闭线程调用
+        /// @details    用于正常的关闭session连接，供服务器关闭线程调用
         void Session::closeSession()
         {
             // 使用基类的关闭函数
-            close();
+            stopToClose();
+        }
+
+        void Session::derivedToClose()
+        {
         }
 
         /// @brief      更新连接时间

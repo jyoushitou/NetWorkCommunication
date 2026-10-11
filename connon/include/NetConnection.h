@@ -211,9 +211,9 @@ namespace Net
         ~Connection() = default;
 
     protected:
-        /// @brief 关闭函数，派生类重写
+        /// @brief 关闭函数，派生类必须重写
         /// @details
-        virtual void toClosed() {};
+        virtual void derivedToClose() = 0;
 
         /// @brief 正常退出时调用此函数
         /// @details 正常退出时直接清理消息队列，发送完毕后关闭

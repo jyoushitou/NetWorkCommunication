@@ -93,6 +93,10 @@ namespace Net
             /// @note       在操作后记得调用此函数刷新时间
             void updateTime();
 
+            /// @brief 重写关闭最后的流程
+            /// @details 用于在session最后关闭时销毁其他动态数据
+            void derivedToClose() override;
+
             /// @brief      获取自身的指针
             /// @details    获取可以用于向上转型的自身指针
             std::shared_ptr<Session> getSession();
@@ -163,13 +167,13 @@ namespace Net
             /// @warning    生命周期须长于本服务器
             boost::asio::io_context& ioc;
 
+        private:
             /// @brief      开始接受连接
             /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
             ///             并为每个新连接创建对应的 Session
             /// @warning    须在 io_context 运行后调用
             void StartAccept();
 
-        private:
             /// @brief      清理失效会话
             /// @details    投递到 io_context 线程内，移除空指针会话（供监控线程调用）
             void clearSession();
