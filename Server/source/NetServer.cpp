@@ -67,7 +67,7 @@ namespace Net
             if (HF != nullptr)
             {
                 // HF必须要可以有回复消息
-                (*HF)(self, msg);
+                (*HF)(self, msg_id, msg);
                 return;
             }
             else
@@ -155,7 +155,7 @@ namespace Net
         /// @param[in] timeOut 会话空闲超时时间（秒），默认 60 秒
         /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF, long long timeOut = 5)
+                       std::shared_ptr<HandleFunction> HF, long long timeOut)
             : Server(io, ep, HF, timeOut, 60)
         {
         }

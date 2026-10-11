@@ -1,5 +1,5 @@
 /// @file        main.cpp
-/// @brief       服务器入口（启动 TCP 服务、处理退出信号）
+/// @brief       测试服务器入口（启动 TCP 服务、处理退出信号）
 /// @author      jyoushitou
 /// @date        2026-09-16
 /// @copyright   Copyright (c) 2026
@@ -24,7 +24,7 @@
 ///             只有回到「源码内置 / 静态库」形态时才需要在程序里补这份定义。
 
 // 服务器监听端口
-constexpr int kListenPort = 26990;
+constexpr int ListenPort = 26990;
 
 int main()
 {
@@ -40,18 +40,18 @@ int main()
     boost::asio::io_context io;
 
     // 创建监听端点
-    boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), kListenPort);
+    boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), ListenPort);
 
     // 业务回调：在 IO 线程中执行，返回值作为回复内容发回客户端
     auto handler = std::make_shared<Net::Server::HandleFunction>(
-        [](const std::shared_ptr<Net::Server::Session>&, const std::string& msg) -> std::string
+        [](const std::shared_ptr<Net::Server::Session>& session, const int& msg_id,
+           const std::string& msg) -> std::string
         {
             Utils::Out::outMsg("收到客户端消息: " + msg);
 
             // TODO: 在这里编写你的业务处理逻辑
 
-            // 返回给客户端的响应
-            return "服务器已收到！";
+            session->reply(msg_id, "服务器已经收到消息");
         });
 
     // 创建服务器对象
@@ -63,7 +63,7 @@ int main()
     // 开始接收连接
     server->start();
 
-    Utils::Out::outMsg("服务器启动，监听端口 " + std::to_string(kListenPort) + " ...等待连接中");
+    Utils::Out::outMsg("服务器启动，监听端口 " + std::to_string(ListenPort) + " ...等待连接中");
 
     // io_context 在独立线程中运行
     std::thread io_thread(
