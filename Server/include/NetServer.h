@@ -39,8 +39,8 @@ namespace Net
         /// @brief 消息回调类型
         /// @details 收到消息后由该回调处理并返回响应字符串
         /// @warning 禁止持有session裸指针，必须使用shared_ptr延长生命周期；回调内部禁止长时间阻塞
-        using HandleFunction = std::function<std::string(const std::shared_ptr<Session>& session, const int& msg_id,
-                                                         const std::string& msg)>;
+        using HandleFunction =
+            std::function<void(const std::shared_ptr<Session>& session, const int& msg_id, const std::string& msg)>;
 
         /// @brief      连接会话
         /// @details    tcp通讯的会话，负责与单个客户端收发数据
@@ -134,7 +134,7 @@ namespace Net
             /// @param[in] timeOut 会话空闲超时时间（秒），默认 60 秒
             /// @warning    须保证 io 的生命周期长于本服务器
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut = 5);
+                   long long timeOut);
 
             /// @brief      构造函数
             /// @details    服务器的构造
