@@ -93,6 +93,11 @@ namespace Net
             /// @note       在操作后记得调用此函数刷新时间
             void updateTime();
 
+            /// @brief 重写关闭最后的流程
+            /// @details 用于在session最后关闭时销毁其他动态数据
+            /// @warning 当前是空实现，因为没有动态资源的实现
+            void derivedToClose() override;
+
             /// @brief      获取自身的指针
             /// @details    获取可以用于向上转型的自身指针
             std::shared_ptr<Session> getSession();
@@ -108,7 +113,7 @@ namespace Net
 
             /// @brief 最后更新时间
             /// @details 记录最后更新的时间
-            time_t lastTime;
+            std::atomic<time_t> lastTime;
 
             /// @brief 记录超时时间
             long long timeout;
@@ -129,7 +134,18 @@ namespace Net
             /// @param[in] timeOut 会话空闲超时时间（秒），默认 60 秒
             /// @warning    须保证 io 的生命周期长于本服务器
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut = 60);
+                   long long timeOut = 5);
+
+            /// @brief      构造函数
+            /// @details    服务器的构造
+            /// @param[in] io 服务器的io_context
+            /// @param[in] ep 监听的本地端点（地址与端口）
+            /// @param[in] HF 业务处理回调（返回值作为回复内容发回客户端）
+            /// @param[in] timeOut 会话空闲超时时间（秒），默认 60 秒
+            /// @param[in] checkTime 检查会话周期
+            /// @warning    须保证 io 的生命周期长于本服务器
+            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
+                   long long timeOut = 5, time_t checkTime = 60);
 
             /// @brief      析构函数
             /// @details    先停止服务器并回收清理线程，避免线程析构时未 join 触发 terminate
@@ -152,13 +168,13 @@ namespace Net
             /// @warning    生命周期须长于本服务器
             boost::asio::io_context& ioc;
 
+        private:
             /// @brief      开始接受连接
             /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
             ///             并为每个新连接创建对应的 Session
             /// @warning    须在 io_context 运行后调用
             void StartAccept();
 
-        private:
             /// @brief      清理失效会话
             /// @details    投递到 io_context 线程内，移除空指针会话（供监控线程调用）
             void clearSession();
@@ -197,9 +213,13 @@ namespace Net
             /// @details 整个服务器session的函数存储
             std::shared_ptr<HandleFunction> HF;
 
-            /// @brief 超时时间
+            /// @brief 监控线程运行时间
             /// @details
-            long long timeOut = 60;
+            long long checkTime = 60;
+
+            /// @brief 设置会话超时时间
+            /// @details
+            time_t timeOut = 5;
         };
     } // namespace Server
 } // namespace Net

@@ -56,24 +56,25 @@ namespace Net
     {
         // 将buf指针置空
         buf = nullptr;
-        // 设置目标值
-        total_len = 0;
         // 设置当前值
         cur_len = 0;
         // 设置消息ID
         this->msg_id = msg_id;
 
+        // 计算出缓存空间
+        total_len = max_len;
+
         // 防御性检查：max_len 必须为正数
         if (max_len <= 0)
         {
-            Utils::Out::outErr("MsgNode: max_len 必须大于 0");
-            return;
+            throw std::invalid_argument("MsgNode: max_len 必须大于 0 ,当前total_len值为" + total_len);
         }
-
-        // 计算出缓存空间
-        total_len = max_len;
         // 申请缓存
         buf = new char[total_len + 1];
+
+        // 初始化开辟的空间
+        std::memset(buf, '\0', static_cast<std::size_t>(total_len));
+
         // 给最后一个空间为'\0'避免超出空间
         buf[total_len] = '\0';
     }
@@ -137,14 +138,9 @@ namespace Net
     void MsgNode::clear()
     {
         // 判断buf是否有指针，且total_len有数据
-        if (buf != nullptr)
+        if (buf == nullptr)
         {
-            // 尝试创建
-            buf = new char[total_len + 1];
-            if (buf == nullptr)
-            {
-                throw std::invalid_argument("buf创建失败");
-            }
+            throw std::invalid_argument("buf为悬空指针，请重新创建");
         }
         else if (total_len > 0)
         {
@@ -193,6 +189,10 @@ namespace Net
         // 关闭状态
         // 初始化为false
         closing = false;
+
+        closeNotified.store(false);
+
+        closeSocket.store(false);
     }
 
     /// @brief      开始函数
@@ -209,15 +209,15 @@ namespace Net
     /// @details    关闭socket并处理发送队列，触发一次关闭回调
     /// @warning    内部使用，禁止外部直接调用
     /// @note
-    void Connection::actuallyClose()
+    void Connection::socketClose()
     {
-        if (!closing)
+        // 检查socket状态
+        if (closeSocket.load())
         {
-            closing = true;
+            closeSocket.store(true);
         }
         else
         {
-            Utils::Out::outMsg("已在关闭流程");
             return;
         }
 
@@ -228,30 +228,34 @@ namespace Net
         socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         socket.close(ec);
 
-        // 这里不能无条件清空 sendQueue：异步写回调可能还在执行，
-        // 其 pop_front() 需要依赖队列仍然存在，避免 Debug 断言中 deque empty 崩溃。
-        // 若当前确实没有发送任务，才做一次最终清理；而有异步写未完成时，
-        // 让回调自己决定何时弹出队首并结束状态。
-        if (!sending)
-        {
-            sendQueue.clear();
-        }
-
         // 防止多次通知关闭
-        if (!closeNotified)
+        if (!closeNotified.load())
         {
             // 通知设为真
-            closeNotified = true;
+            closeNotified.store(true);
 
-            toClosed();
+            derivedToClose();
         }
     }
 
-    /// @brief      关闭连接
+    /// @brief 正常退出时调用此函数
+    /// @details 正常退出时直接清理消息队列，发送完毕后关闭
+    /// @warning 调用后连接不可用，会发送通知消息
+    void Connection::stopToClose()
+    {
+        if (closing)
+        {
+            return;
+        }
+
+        connectionClose();
+    }
+
+    /// @brief      connection连接的正常关闭连接
     /// @details    向 IO 线程投递关闭请求，API 允许外部线程调用
     /// @warning    异步执行，调用后连接不再可用
     /// @note
-    void Connection::close()
+    void Connection::connectionClose()
     {
         Utils::Out::outMsg("正在关闭Session");
 
@@ -275,18 +279,30 @@ namespace Net
                               }
 
                               // 判断是否发送完毕或者在发送状态
-                              // 是：则发送消息
+                              // 不是：则进入断连阶段
                               if (!sending && sendQueue.empty())
                               {
                                   // 启动关闭函数
-                                  actuallyClose();
+                                  socketClose();
                               }
-                              // 不在发送状态且没有消息，直接关闭Connection
+                              // 不在发送状态且有消息，发送消息
                               else
                               {
                                   doSend();
                               }
                           });
+    }
+
+    /// @brief 出错时调用此函数
+    /// @details 错误时直接清理消息队列，不再发送完毕后关闭
+    /// @warning 调用后连接不可用，且不会发送通知消息
+    void Connection::errToClose()
+    {
+        // 清理所有的发送队列
+        sendQueue.clear();
+
+        // 调用socket直接关闭
+        socketClose();
     }
 
     /// @brief      读取头部
@@ -300,6 +316,7 @@ namespace Net
 
         // 申请缓存
         recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
+
         try
         {
             recvNode->clear();
@@ -307,10 +324,16 @@ namespace Net
         catch (boost::system::error_code ec)
         {
             Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+
+            // 申请失败，则关闭连接
+            errToClose();
+
+            return;
         }
         catch (...)
         {
             Utils::Out::outErr("未知错误");
+            return;
         }
 
         // 读取数据
@@ -321,7 +344,7 @@ namespace Net
                                     if (ec)
                                     {
                                         Utils::Out::outErr(ec.what());
-                                        actuallyClose();
+                                        errToClose();
                                         return;
                                     }
 
@@ -345,7 +368,9 @@ namespace Net
                                     if (msg_len > MAX_LENGTH || msg_len <= 0)
                                     {
                                         Utils::Out::outErr("收到的消息的长度错误，请修复后重试");
-                                        return;
+
+                                        // 消息错误，直接重新等待新的
+                                        readHead();
                                     }
 
                                     Utils::Out::outMsg("解析完成！ID：" + std::to_string(msg_id) + "，长度：" +
@@ -361,7 +386,7 @@ namespace Net
                                         Utils::Out::outMsg("正处在关闭连接,拒绝接收新消息");
 
                                         // 关闭连接
-                                        actuallyClose();
+                                        stopToClose();
                                     }
                                 });
     }
@@ -378,7 +403,7 @@ namespace Net
         if (closing)
         {
             Utils::Out::outErr("收到消息，但是正在关闭连接，拒绝接收消息");
-            actuallyClose();
+            stopToClose();
             return;
         }
 
@@ -398,10 +423,15 @@ namespace Net
         catch (boost::system::error_code ec)
         {
             Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+
+            errToClose();
+
+            return;
         }
         catch (...)
         {
             Utils::Out::outErr("未知错误");
+            return;
         }
 
         // 接收消息
@@ -413,7 +443,7 @@ namespace Net
                                     {
                                         Utils::Out::outErr("出现错误：" + ec.what() + "关闭连接");
                                         // 关闭连接
-                                        actuallyClose();
+                                        errToClose();
                                         return;
                                     }
 
@@ -438,12 +468,12 @@ namespace Net
                                     {
                                         Utils::Out::outErr(std::string("抛出异常: ") + e.what());
                                         // 关闭连接
-                                        actuallyClose();
+                                        errToClose();
                                     }
                                     catch (...)
                                     {
                                         Utils::Out::outErr("未知异常");
-                                        actuallyClose();
+                                        errToClose();
                                     }
                                     // 如果现在socket连接并且不在关闭状态
                                     if (socket.is_open() && !closing)
@@ -494,6 +524,9 @@ namespace Net
                               if (closing)
                               {
                                   Utils::Out::outErr("准备发送消息，但是正在关闭连接，拒绝添加任务到发送队列");
+
+                                  stopToClose();
+
                                   return;
                               }
 
@@ -508,7 +541,7 @@ namespace Net
                               uint32_t net_msg_len = htonl(static_cast<int>(msg.size()));
                               uint64_t net_msg_id = htonll(static_cast<uint64_t>(msg_id));
 
-                              // 写入缓存（写ID，写长度）
+                              // 写入缓存（写ID，写长度，写消息）
                               std::memcpy(buf, &net_msg_id, HEAD_ID_LENGTH);
                               std::memcpy(buf + HEAD_ID_LENGTH, &net_msg_len, HEAD_LEN_LENGTH);
                               if (!msg.empty())
@@ -537,10 +570,14 @@ namespace Net
                                   catch (boost::system::error_code ec)
                                   {
                                       Utils::Out::outErr("出现错误" + ec.value());
+
+                                      errToClose();
                                   }
                                   catch (...)
                                   {
                                       Utils::Out::outErr("未知错误");
+
+                                      errToClose();
                                   }
                               }
                           });
@@ -560,7 +597,7 @@ namespace Net
             // 队列发完且未请求过关闭
             if (closing)
             {
-                actuallyClose();
+                stopToClose();
             }
             return;
         }
@@ -585,7 +622,7 @@ namespace Net
                                      {
                                          Utils::Out::outErr("发送错误，值为：" + ec.what());
                                          sending = false;
-                                         actuallyClose();
+                                         errToClose();
                                          return;
                                      }
 
@@ -611,7 +648,7 @@ namespace Net
                                          if (closing)
                                          {
                                              // 关闭连接
-                                             actuallyClose();
+                                             stopToClose();
                                          }
                                      }
                                  });

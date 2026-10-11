@@ -194,6 +194,16 @@ namespace Net
         /// @note
         virtual void start();
 
+        /// @brief      析构函数
+        /// @details    采用默认析构
+        /// @note
+        ~Connection() = default;
+
+    protected:
+        /// @brief 更新时间
+        /// @note 可以重写此函数实现时间的更新
+        virtual void updateTime() {};
+
         /// @brief 后期转到具体业务
         /// @param msg_id 消息id
         /// @param msg 消息体
@@ -201,30 +211,19 @@ namespace Net
         /// @note
         virtual void recvToWork(const unsigned long long msg_id, std::string msg) = 0;
 
-        /// @brief 更新时间
-        /// @note 可以重写此函数实现时间的更新
-        virtual void updateTime() {};
+        /// @brief 关闭函数，派生类必须重写
+        /// @details
+        virtual void derivedToClose() = 0;
 
-        /// @brief      析构函数
-        /// @details    采用默认析构
-        /// @note
-        ~Connection() = default;
+        /// @brief 正常退出时调用此函数
+        /// @details 正常退出时直接清理消息队列，发送完毕后关闭
+        /// @warning 调用后连接不可用，会发送通知消息
+        void stopToClose();
 
-    protected:
-        /// @brief      关闭连接
-        /// @details    向 IO 线程投递关闭请求，允许外部线程调用
-        /// @warning    异步执行，调用后连接不再可用
-        /// @note
-        void close();
-
-        /// @brief 关闭函数，派生类重写
-        virtual void toClosed() {};
-
-        /// @brief      关闭socket
-        /// @details    关闭socket并处理发送队列，IO线程内调用
-        /// @warning    内部使用，禁止外部直接调用
-        /// @note       使用前一定要清空所有的发送
-        void actuallyClose();
+        /// @brief 出错时调用此函数
+        /// @details 错误时直接清理消息队列，不再发送完毕后关闭
+        /// @warning 调用后连接不可用，且不会发送通知消息
+        void errToClose();
 
         /// @brief      存储socket
         /// @details    连接使用的TCP socket
@@ -239,12 +238,12 @@ namespace Net
         /// @brief      关闭状态
         /// @details    判断当前是否处于关闭流程
         /// @note
-        bool closing;
+        std::atomic<bool> closing;
 
         /// @brief      关闭通知标记
-        /// @details    防止 actuallyClose 重复触发回调
+        /// @details    防止 socketClose 重复触发回调
         /// @note
-        bool closeNotified = false;
+        std::atomic<bool> closeNotified = false;
 
         /// @brief      所属的 io_context
         /// @details    保存该会话使用的 io_context 引用
@@ -253,6 +252,18 @@ namespace Net
         boost::asio::io_context& ioc;
 
     private:
+        /// @brief      connection连接的正常关闭连接
+        /// @details    向 IO 线程投递关闭请求，允许外部线程调用
+        /// @warning    异步执行，调用后连接不再可用
+        /// @note
+        void connectionClose();
+
+        /// @brief      只关闭socket
+        /// @details    关闭socket，并调用最后的虚函数
+        /// @warning    内部使用，禁止外部直接调用
+        /// @note       使用前一定要清空所有的发送
+        void socketClose();
+
         /// @brief      发送消息到发送队列
         /// @details    把消息封装为发送任务并加入发送队列，线程安全，可在外部线程调用
         /// @param[in] msg_id 消息全局唯一ID
@@ -286,5 +297,9 @@ namespace Net
         /// @details    待发送任务的队列
         /// @note
         std::deque<std::shared_ptr<SendNode>> sendQueue;
+
+        /// @brief  socket是否已经被关闭
+        /// @details 用于标记是否还有效
+        std::atomic<bool> closeSocket = false;
     };
 } // namespace Net
