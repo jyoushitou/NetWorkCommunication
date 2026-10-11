@@ -238,11 +238,21 @@ namespace Net
         }
     }
 
-    /// @brief      关闭连接
+    void Connection::stopToClose()
+    {
+        if (closing)
+        {
+            return;
+        }
+
+        connectionClose();
+    }
+
+    /// @brief      connection连接的正常关闭连接
     /// @details    向 IO 线程投递关闭请求，API 允许外部线程调用
     /// @warning    异步执行，调用后连接不再可用
     /// @note
-    void Connection::conectionClose()
+    void Connection::connectionClose()
     {
         Utils::Out::outMsg("正在关闭Session");
 

@@ -256,7 +256,7 @@ namespace Net
         /// @details    向 IO 线程投递关闭请求，允许外部线程调用
         /// @warning    异步执行，调用后连接不再可用
         /// @note
-        void conectionClose();
+        void connectionClose();
 
         /// @brief      只关闭socket
         /// @details    关闭socket，并调用最后的虚函数
