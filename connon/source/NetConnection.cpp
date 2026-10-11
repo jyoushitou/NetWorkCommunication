@@ -189,6 +189,10 @@ namespace Net
         // 关闭状态
         // 初始化为false
         closing = false;
+
+        closeNotified.store(false);
+
+        closeSocket.store(false);
     }
 
     /// @brief      开始函数
@@ -205,15 +209,15 @@ namespace Net
     /// @details    关闭socket并处理发送队列，触发一次关闭回调
     /// @warning    内部使用，禁止外部直接调用
     /// @note
-    void Connection::actuallyClose()
+    void Connection::socketClose()
     {
-        if (!closing)
+        // 检查socket状态
+        if (closeSocket.load())
         {
-            closing = true;
+            closeSocket.store(true);
         }
         else
         {
-            Utils::Out::outMsg("已在关闭流程");
             return;
         }
 
@@ -224,20 +228,11 @@ namespace Net
         socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         socket.close(ec);
 
-        // 这里不能无条件清空 sendQueue：异步写回调可能还在执行，
-        // 其 pop_front() 需要依赖队列仍然存在，避免 Debug 断言中 deque empty 崩溃。
-        // 若当前确实没有发送任务，才做一次最终清理；而有异步写未完成时，
-        // 让回调自己决定何时弹出队首并结束状态。
-        if (!sending)
-        {
-            sendQueue.clear();
-        }
-
         // 防止多次通知关闭
-        if (!closeNotified)
+        if (!closeNotified.load())
         {
             // 通知设为真
-            closeNotified = true;
+            closeNotified.store(true);
 
             toClosed();
         }
@@ -271,13 +266,13 @@ namespace Net
                               }
 
                               // 判断是否发送完毕或者在发送状态
-                              // 是：则发送消息
+                              // 不是：则进入断连阶段
                               if (!sending && sendQueue.empty())
                               {
                                   // 启动关闭函数
-                                  actuallyClose();
+                                  socketClose();
                               }
-                              // 不在发送状态且没有消息，直接关闭Connection
+                              // 不在发送状态且有消息，发送消息
                               else
                               {
                                   doSend();
@@ -296,6 +291,7 @@ namespace Net
 
         // 申请缓存
         recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
+
         try
         {
             recvNode->clear();
@@ -303,6 +299,10 @@ namespace Net
         catch (boost::system::error_code ec)
         {
             Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+
+            // 申请失败，则关闭连接
+            errToClose();
+
             return;
         }
         catch (...)
@@ -319,7 +319,7 @@ namespace Net
                                     if (ec)
                                     {
                                         Utils::Out::outErr(ec.what());
-                                        actuallyClose();
+                                        errToClose();
                                         return;
                                     }
 
@@ -361,7 +361,7 @@ namespace Net
                                         Utils::Out::outMsg("正处在关闭连接,拒绝接收新消息");
 
                                         // 关闭连接
-                                        actuallyClose();
+                                        stopToClose();
                                     }
                                 });
     }
@@ -378,7 +378,7 @@ namespace Net
         if (closing)
         {
             Utils::Out::outErr("收到消息，但是正在关闭连接，拒绝接收消息");
-            actuallyClose();
+            stopToClose();
             return;
         }
 
@@ -398,6 +398,9 @@ namespace Net
         catch (boost::system::error_code ec)
         {
             Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+
+            errToClose();
+
             return;
         }
         catch (...)
@@ -415,7 +418,7 @@ namespace Net
                                     {
                                         Utils::Out::outErr("出现错误：" + ec.what() + "关闭连接");
                                         // 关闭连接
-                                        actuallyClose();
+                                        errToClose();
                                         return;
                                     }
 
@@ -440,12 +443,12 @@ namespace Net
                                     {
                                         Utils::Out::outErr(std::string("抛出异常: ") + e.what());
                                         // 关闭连接
-                                        actuallyClose();
+                                        errToClose();
                                     }
                                     catch (...)
                                     {
                                         Utils::Out::outErr("未知异常");
-                                        actuallyClose();
+                                        errToClose();
                                     }
                                     // 如果现在socket连接并且不在关闭状态
                                     if (socket.is_open() && !closing)
@@ -496,6 +499,9 @@ namespace Net
                               if (closing)
                               {
                                   Utils::Out::outErr("准备发送消息，但是正在关闭连接，拒绝添加任务到发送队列");
+
+                                  stopToClose();
+
                                   return;
                               }
 
@@ -510,7 +516,7 @@ namespace Net
                               uint32_t net_msg_len = htonl(static_cast<int>(msg.size()));
                               uint64_t net_msg_id = htonll(static_cast<uint64_t>(msg_id));
 
-                              // 写入缓存（写ID，写长度）
+                              // 写入缓存（写ID，写长度，写消息）
                               std::memcpy(buf, &net_msg_id, HEAD_ID_LENGTH);
                               std::memcpy(buf + HEAD_ID_LENGTH, &net_msg_len, HEAD_LEN_LENGTH);
                               if (!msg.empty())
@@ -539,10 +545,14 @@ namespace Net
                                   catch (boost::system::error_code ec)
                                   {
                                       Utils::Out::outErr("出现错误" + ec.value());
+
+                                      errToClose();
                                   }
                                   catch (...)
                                   {
                                       Utils::Out::outErr("未知错误");
+
+                                      errToClose();
                                   }
                               }
                           });
@@ -562,7 +572,7 @@ namespace Net
             // 队列发完且未请求过关闭
             if (closing)
             {
-                actuallyClose();
+                stopToClose();
             }
             return;
         }
@@ -587,7 +597,7 @@ namespace Net
                                      {
                                          Utils::Out::outErr("发送错误，值为：" + ec.what());
                                          sending = false;
-                                         actuallyClose();
+                                         errToClose();
                                          return;
                                      }
 
@@ -613,7 +623,7 @@ namespace Net
                                          if (closing)
                                          {
                                              // 关闭连接
-                                             actuallyClose();
+                                             stopToClose();
                                          }
                                      }
                                  });
