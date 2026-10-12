@@ -62,6 +62,9 @@ namespace Net
             HostPort getHostPort();
 
         protected:
+            /// @brief 重写最后的关闭流程
+            void derivedToClose() override;
+
             /// @brief 后期转到具体业务
             /// @param msg_id 消息id
             /// @param msg 消息体
@@ -69,7 +72,7 @@ namespace Net
             /// @note
             void recvToWork(unsigned long long, std::string) override;
 
-                private:
+        private:
             /// @brief      解析器
             /// @details    用于异步解析服务器地址（必须作为成员，保证异步解析期间对象存活）
             /// @warning    生命周期须长于本客户端

@@ -35,6 +35,9 @@ namespace Net
             this->HF = HF;
             // 给timeout赋值初始化为60s
             this->timeout = timeout ? timeout : 60;
+
+            // 初始化时间
+            updateTime();
         }
 
         /// @brief      业务处理
@@ -67,12 +70,13 @@ namespace Net
             if (HF != nullptr)
             {
                 // HF必须要可以有回复消息
-                (*HF)(self, msg);
+                (*HF)(self, msg_id, msg);
                 return;
             }
             else
             {
                 Utils::Out::outErr("未设置消息回调函数！");
+
                 closeSession();
                 return;
             }
@@ -92,7 +96,7 @@ namespace Net
         /// @warning    禁止在回调或事件循环中长时间阻塞
         void Session::reply(unsigned long long msg_id, const std::string& msg)
         {
-            if (msg.empty() || msg_id < 0)
+            if (msg.empty())
             {
                 Utils::Out::outErr("消息为空或者消息id错误");
                 return;
@@ -154,7 +158,7 @@ namespace Net
         /// @param[in] timeOut 会话空闲超时时间（秒），默认 60 秒
         /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF, long long timeOut = 5)
+                       std::shared_ptr<HandleFunction> HF, long long timeOut)
             : Server(io, ep, HF, timeOut, 60)
         {
         }
@@ -328,7 +332,10 @@ namespace Net
                                           {
                                               // 避免悬空的迭代器
                                               it = sessions.erase(it);
+                                              // 避免后面自增
+                                              continue;
                                           }
+                                          it++;
                                       }
                                   });
             }

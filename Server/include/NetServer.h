@@ -39,8 +39,8 @@ namespace Net
         /// @brief 消息回调类型
         /// @details 收到消息后由该回调处理并返回响应字符串
         /// @warning 禁止持有session裸指针，必须使用shared_ptr延长生命周期；回调内部禁止长时间阻塞
-        using HandleFunction =
-            std::function<std::string(const std::shared_ptr<Session>& session, const std::string& msg)>;
+        using HandleFunction = std::function<void(const std::shared_ptr<Session>& session,
+                                                  const unsigned long long& msg_id, const std::string& msg)>;
 
         /// @brief      连接会话
         /// @details    tcp通讯的会话，负责与单个客户端收发数据
@@ -104,19 +104,19 @@ namespace Net
 
             /// @brief 回调函数
             /// @details 用于收到消息的具体消息处理
-            std::shared_ptr<HandleFunction> HF;
+            std::shared_ptr<HandleFunction> HF = nullptr;
 
         private:
             /// @brief 停止标志
             /// @details 标识该会话是否已停止
-            std::atomic<bool> stop;
+            std::atomic<bool> stop = false;
 
             /// @brief 最后更新时间
             /// @details 记录最后更新的时间
             std::atomic<time_t> lastTime;
 
             /// @brief 记录超时时间
-            long long timeout;
+            long long timeout = 60;
         };
 
         /// @brief      服务器端
@@ -134,7 +134,7 @@ namespace Net
             /// @param[in] timeOut 会话空闲超时时间（秒），默认 60 秒
             /// @warning    须保证 io 的生命周期长于本服务器
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut = 5);
+                   long long timeOut);
 
             /// @brief      构造函数
             /// @details    服务器的构造
@@ -145,7 +145,7 @@ namespace Net
             /// @param[in] checkTime 检查会话周期
             /// @warning    须保证 io 的生命周期长于本服务器
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut = 5, time_t checkTime = 60);
+                   long long timeOut = 60, time_t checkTime = 60);
 
             /// @brief      析构函数
             /// @details    先停止服务器并回收清理线程，避免线程析构时未 join 触发 terminate
@@ -219,7 +219,7 @@ namespace Net
 
             /// @brief 设置会话超时时间
             /// @details
-            time_t timeOut = 5;
+            time_t timeOut = 60;
         };
     } // namespace Server
 } // namespace Net

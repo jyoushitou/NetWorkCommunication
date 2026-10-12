@@ -1,14 +1,19 @@
-# VS Code 配置不提交
-.vscode/
+# ============================================================================
+#  .gitignore
+#  原则：构建方式统一由 CMakeLists.txt 描述，仓库不携带任何"一次性"的
+#        构建脚本、预设文件或 IDE 专用配置。
+# ============================================================================
 
-# clang-format 配置不提交
-.clang-format
-
-# 编译产物
+# ── 构建产物 ────────────────────────────────────────────────
 build/
+build-*/
 install/
 bin/
 obj/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
 *.o
 *.obj
 *.exe
@@ -16,17 +21,31 @@ obj/
 *.lib
 *.pdb
 *.ilk
+*.exp
+*.idb
 
-# IDE 配置
+# ── 项目自带的临时构建脚本与预设（已废弃，统一走 CMakeLists.txt）──
+# 保留条目是为了防止历史文件被误提交；这些文件不应存在于仓库中。
+CMakePresets.json
+CMakeUserPresets.json
+build.cmd
+build.bat
+build.ps1
+
+# ── IDE 配置 ───────────────────────────────────────────────
+# 环境探测与编译参数由 CMakeLists.txt 负责，不再依赖 IDE 专用文件
+.vscode/
 .idea/
 .vs/
 *.suo
 *.user
 *.userosscache
 *.sln.docstates
+*.sln
+*.vcxproj
+*.vcxproj.filters
 
-
-# 日志和临时文件
+# ── 日志与临时文件 ─────────────────────────────────────────
 logs/
 *.log
 *.tmp
@@ -36,6 +55,8 @@ logs/
 *~
 .DS_Store
 Thumbs.db
+
+# ── 历史遗留目录 ───────────────────────────────────────────
 sdk/
 out/
 lib/

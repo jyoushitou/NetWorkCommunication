@@ -15,6 +15,15 @@
 
 extern int Service_ID;
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h> // htonl / ntohl
+#else
+#include <arpa/inet.h> // htonl / ntohl
+#endif
+
 namespace Net
 {
     /// @brief      64位主机字节序转网络字节序
@@ -48,7 +57,7 @@ namespace Net
 
     /// @brief      构造函数（有消息ID和长度）
     /// @details    指定消息ID与缓存长度，并按长度申请缓冲区
-    /// @param[in] msg_id_ 消息全局唯一ID
+    /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] max_len 缓存的最大长度
     /// @warning    禁止传非正数，否则缓冲区申请失败
     /// @note
@@ -61,22 +70,7 @@ namespace Net
         // 设置消息ID
         this->msg_id = msg_id;
 
-        // 计算出缓存空间
-        total_len = max_len;
-
-        // 防御性检查：max_len 必须为正数
-        if (max_len <= 0)
-        {
-            throw std::invalid_argument("MsgNode: max_len 必须大于 0 ,当前total_len值为" + total_len);
-        }
-        // 申请缓存
-        buf = new char[total_len + 1];
-
-        // 初始化开辟的空间
-        std::memset(buf, '\0', static_cast<std::size_t>(total_len));
-
-        // 给最后一个空间为'\0'避免超出空间
-        buf[total_len] = '\0';
+        clear(max_len);
     }
     /// @brief      获取缓存区指针
     /// @return     指向缓冲区首地址的指针
@@ -117,11 +111,11 @@ namespace Net
     }
 
     /// @brief      设置消息ID
-    /// @param[in] msg_id_ 消息全局唯一ID
+    /// @param[in] msg_id 消息全局唯一ID
     /// @note
-    void MsgNode::setID(unsigned long long msg_id_)
+    void MsgNode::setID(unsigned long long msg_id)
     {
-        msg_id = msg_id_;
+        this->msg_id = msg_id;
     }
 
     /// @brief      析构函数
@@ -151,6 +145,40 @@ namespace Net
 
         // 将读取指针复位
         cur_len = 0;
+    }
+
+    /// @brief 重新分配缓存区大小
+    /// @param len
+    /// @return
+    void MsgNode::clear(int len)
+    {
+        // 防御性检查：max_len 必须为正数
+        if (len <= 0)
+        {
+            throw std::invalid_argument("MsgNode: max_len 必须大于 0 ,当前total_len值为" + std::to_string(total_len));
+        }
+
+        if (buf != nullptr)
+        {
+            // 删除之前的缓存区大小
+            delete buf;
+        }
+
+        // 设置新的缓冲区大小
+        total_len = len;
+
+        // 申请新的缓冲区大小
+        buf = new char[total_len + 1];
+
+        // 检查是否申请成功
+        if (buf == nullptr)
+        {
+            throw std::invalid_argument("内存申请失败");
+        }
+        buf[total_len] = '\0';
+
+        // 清理大小
+        clear();
     }
 
     /// @brief      构造函数（有消息ID和长度）
@@ -212,9 +240,9 @@ namespace Net
     void Connection::socketClose()
     {
         // 检查socket状态
-        if (closeSocket.load())
+        if (!closeSocket.exchange(true))
         {
-            closeSocket.store(true);
+            return;
         }
         else
         {
@@ -229,11 +257,8 @@ namespace Net
         socket.close(ec);
 
         // 防止多次通知关闭
-        if (!closeNotified.load())
+        if (!closeNotified.exchange(true))
         {
-            // 通知设为真
-            closeNotified.store(true);
-
             derivedToClose();
         }
     }
@@ -314,16 +339,20 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        // 申请缓存
-        recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
-
         try
         {
-            recvNode->clear();
+            if (recv == nullptr)
+            {
+                // 申请接收缓存
+                // 使用共享指针
+                recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
+            }
+
+            recvNode->clear(HEAD_LENGTH);
         }
-        catch (boost::system::error_code ec)
+        catch (const std::exception& e)
         {
-            Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+            Utils::Out::outErr("数据清理失败，错误码！" + std::string(e.what()));
 
             // 申请失败，则关闭连接
             errToClose();
@@ -367,21 +396,15 @@ namespace Net
                                     // 判断传入数据是否正确
                                     if (msg_len > MAX_LENGTH || msg_len <= 0)
                                     {
-                                        Utils::Out::outErr("收到的消息的长度错误，请修复后重试");
+                                        Utils::Out::outErr("收到的消息的长度错误，请通知客户端修复后重试");
 
-                                        // 消息错误，直接重新等待新的
-                                        readHead();
+                                        errToClose();
                                     }
 
                                     Utils::Out::outMsg("解析完成！ID：" + std::to_string(msg_id) + "，长度：" +
                                                        std::to_string(msg_len));
                                     // 判断是否处于关闭状态
-                                    if (!closing)
-                                    {
-                                        // 读取消息体
-                                        readBody(msg_id, static_cast<int>(msg_len));
-                                    }
-                                    else
+                                    if (closing)
                                     {
                                         Utils::Out::outMsg("正处在关闭连接,拒绝接收新消息");
 
@@ -410,19 +433,24 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        // 申请接收缓存
-        // 使用共享指针
-        recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
-
         // 尝试先清理,避免因为之前的缓存影响
         try
         {
+            if (recv == nullptr)
+            {
+                // 申请接收缓存
+                // 使用共享指针
+                recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
+            }
+
+            // 设置当前的缓冲区
+            recvNode->setID(msg_id);
             // 清理缓存
-            recvNode->clear();
+            recvNode->clear(msg_len);
         }
-        catch (boost::system::error_code ec)
+        catch (const std::exception& e)
         {
-            Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+            Utils::Out::outErr("数据清理失败，错误码！" + std::string(e.what()));
 
             errToClose();
 
@@ -567,9 +595,9 @@ namespace Net
                                       // 启动发送队列
                                       doSend();
                                   }
-                                  catch (boost::system::error_code ec)
+                                  catch (const std::exception& e)
                                   {
-                                      Utils::Out::outErr("出现错误" + ec.value());
+                                      Utils::Out::outErr("出现错误" + std::string(e.what()));
 
                                       errToClose();
                                   }
@@ -621,7 +649,6 @@ namespace Net
                                      if (ec)
                                      {
                                          Utils::Out::outErr("发送错误，值为：" + ec.what());
-                                         sending = false;
                                          errToClose();
                                          return;
                                      }
