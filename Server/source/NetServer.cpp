@@ -96,7 +96,7 @@ namespace Net
         /// @warning    禁止在回调或事件循环中长时间阻塞
         void Session::reply(unsigned long long msg_id, const std::string& msg)
         {
-            if (msg.empty() || msg_id < 0)
+            if (msg.empty())
             {
                 Utils::Out::outErr("消息为空或者消息id错误");
                 return;
