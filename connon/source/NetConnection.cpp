@@ -221,9 +221,9 @@ namespace Net
     void Connection::socketClose()
     {
         // 检查socket状态
-        if (closeSocket.load())
+        if (!closeSocket.exchange(true))
         {
-            closeSocket.store(true);
+            return;
         }
         else
         {
@@ -238,11 +238,8 @@ namespace Net
         socket.close(ec);
 
         // 防止多次通知关闭
-        if (!closeNotified.load())
+        if (!closeNotified.exchange(true))
         {
-            // 通知设为真
-            closeNotified.store(true);
-
             derivedToClose();
         }
     }
@@ -376,21 +373,15 @@ namespace Net
                                     // 判断传入数据是否正确
                                     if (msg_len > MAX_LENGTH || msg_len <= 0)
                                     {
-                                        Utils::Out::outErr("收到的消息的长度错误，请修复后重试");
+                                        Utils::Out::outErr("收到的消息的长度错误，请通知客户端修复后重试");
 
-                                        // 消息错误，直接重新等待新的
-                                        readHead();
+                                        errToClose();
                                     }
 
                                     Utils::Out::outMsg("解析完成！ID：" + std::to_string(msg_id) + "，长度：" +
                                                        std::to_string(msg_len));
                                     // 判断是否处于关闭状态
-                                    if (!closing)
-                                    {
-                                        // 读取消息体
-                                        readBody(msg_id, static_cast<int>(msg_len));
-                                    }
-                                    else
+                                    if (closing)
                                     {
                                         Utils::Out::outMsg("正处在关闭连接,拒绝接收新消息");
 

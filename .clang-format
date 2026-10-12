@@ -1,0 +1,28 @@
+Language: Cpp
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+BreakBeforeBraces: Allman
+AccessModifierOffset: -4
+ColumnLimit: 120
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: None
+NamespaceIndentation: All
+SortIncludes: false
+AlignAfterOpenBracket: Align
+
+# protobuf 专用排版
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+# 【已修复】原为 "SpaceBeforeLBrace: true"，clang-format 不存在该关键字
+# （clang-format 23.1.0 报 "unknown key 'SpaceBeforeLBrace'"，会导致整个
+#  .clang-format 加载失败、C/C++ 格式化完全不可用）。
+# 花括号前的换行/空格效果由上面的 BreakBeforeBraces: Allman 负责实现。
+# 如需"冒号前加空格"，可改用下面这两个合法关键字（默认关闭，按需启用）：
+# SpaceBeforeInheritanceColon: true
+# SpaceBeforeCtorInitializerColon: true
+AllowShortBlocksOnASingleLine: Never
+# 该项只接受布尔值（不能写 None），保持原意 false
+AllowShortEnumsOnASingleLine: false
+# proto注释、空格风格
+CommentPragmas: "^ IWYU pragma:"

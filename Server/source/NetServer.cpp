@@ -329,7 +329,10 @@ namespace Net
                                           {
                                               // 避免悬空的迭代器
                                               it = sessions.erase(it);
+                                              // 避免后面自增
+                                              continue;
                                           }
+                                          it++;
                                       }
                                   });
             }

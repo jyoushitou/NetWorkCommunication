@@ -8,7 +8,7 @@ if(POLICY CMP0167)  # 仅当下游 CMake 认识这条策略时才设置
     cmake_policy(SET CMP0167 NEW)  # NEW：强制 Boost 走 CONFIG 模式，避免下游回退到已删除的 FindBoost 模块
 endif()  # 策略设置结束
 
-find_dependency(Boost CONFIG COMPONENTS system thread)  # 递归查找 Boost：下游找到 CommonNet 的同时就得到 Boost::system / Boost::thread
+find_dependency(Boost CONFIG COMPONENTS system)  # 递归查找 Boost：下游找到 CommonNet 的同时就得到 Boost::system（asio 是纯头文件，无需组件名）
 
 # Utils（本工程的前置依赖库）由 vcpkg 的 utils 端口提供，导入目标 Utils::Utils；
 # Common::Utils / Common::Net::* 的接口上带着它，故必须一并找回

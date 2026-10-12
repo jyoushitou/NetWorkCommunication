@@ -5,14 +5,98 @@ if(POLICY CMP0167) # 仅当当前 CMake 认识 CMP0167 这条策略时才设置�
     cmake_policy(SET CMP0167 NEW) # NEW：Boost 一律走 CONFIG 模式（用 vcpkg 的 BoostConfig.cmake），不回退到已删除的 FindBoost 模块
 endif() # CMP0167 策略设置结束
 
-# ── 通过 vcpkg 查找依赖（可移植写法，沿用原有子工程逻辑）─────────
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE) # 调用方没有用 -DCMAKE_TOOLCHAIN_FILE=... 显式指定工具链时，才自动探测
-    if(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake") # 环境变量 VCPKG_ROOT 已设置，且其下确实存在 vcpkg 工具链文件
-        set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" # 采用环境里的 vcpkg 工具链（它负责把 installed/<triplet> 加进搜索路径）
-            CACHE STRING "vcpkg toolchain file") # 写进缓存，后续 configure 复用；可在 CMakeCache.txt 中查看与覆盖
-    else() # 环境变量缺失或指向的目录里没有工具链
-        message(FATAL_ERROR "未找到 vcpkg 工具链：请设置环境变量 VCPKG_ROOT，或使用 -DCMAKE_TOOLCHAIN_FILE=... 指定 vcpkg.cmake") # 立即失败：没有工具链后面找 Boost / Utils 必然失败，早报错比晚报错清楚
-    endif() # 环境变量探测分支结束
+# ── 依赖环境自动探测：vcpkg ─────────────────────────────
+# 设计目标：只用标准的 CMake 命令就能构建，不依赖任何外部脚本或预设文件：
+#     cmake -B build
+#     cmake --build build --config Debug
+#
+# 探测顺序（命中即停，全部是只读判断，失败时给出可操作的提示）：
+#   1. 调用方用 -DCMAKE_TOOLCHAIN_FILE=... 显式指定  -> 完全以调用方为准
+#   2. 环境变量 VCPKG_ROOT
+#   3. 构建目录里 VS/CMake 集成生成的 build.ninja 中记录的路径
+#      （Visual Studio 的 CMake 集成会把 vcpkg 工具链写进该文件）
+#   4. 常见安装位置（C:/vcpkg、D:/vcpkg、$ENV{HOME}/vcpkg、Program Files 等）
+#   5. PATH 上的 vcpkg.exe，回溯到它的安装根
+#
+# 说明：第 1 步的 CMAKE_TOOLCHAIN_FILE 变量在首次 configure 后会进入缓存，
+#       所以这段探测只在首次配置时真正执行。
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE) # 调用方没有显式指定工具链时才进入探测
+
+    set(_commonnet_vcpkg_root "") # 探测结果：vcpkg 安装根
+
+    # ① 环境变量 VCPKG_ROOT（最常见）
+    if(DEFINED ENV{VCPKG_ROOT})
+        file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" _commonnet_env_root) # 反斜杠统一成正斜杠，便于后续拼接
+        if(EXISTS "${_commonnet_env_root}/scripts/buildsystems/vcpkg.cmake")
+            set(_commonnet_vcpkg_root "${_commonnet_env_root}")
+        endif()
+    endif()
+
+    # ② 构建目录里的 build.ninja（Visual Studio 的 CMake 集成会在其中写入 vcpkg 工具链路径）
+    set(_commonnet_ninja "${CMAKE_BINARY_DIR}/build.ninja")
+    if(NOT _commonnet_vcpkg_root AND EXISTS "${_commonnet_ninja}")
+        file(STRINGS "${_commonnet_ninja}" _commonnet_ninja_lines
+            REGEX "vcpkg\\.cmake") # 只取含 vcpkg 工具链路径的行，避免整文件读入内存
+        foreach(_commonnet_line IN LISTS _commonnet_ninja_lines)
+            # build.ninja 里的路径带引号，取到 "/scripts/buildsystems/vcpkg.cmake" 之前的部分即安装根
+            if(_commonnet_line MATCHES "([A-Za-z]:/[^\"]*)/scripts/buildsystems/vcpkg\\.cmake")
+                set(_commonnet_vcpkg_root "${CMAKE_MATCH_1}") # 捕获组 1 即 vcpkg 根目录
+                break()
+            endif()
+        endforeach()
+    endif()
+
+    # ③ 常见安装位置
+    if(NOT _commonnet_vcpkg_root)
+        set(_commonnet_candidates
+            "C:/vcpkg"
+            "D:/vcpkg"
+            "E:/vcpkg"
+            "$ENV{USERPROFILE}/vcpkg"
+            "$ENV{HOME}/vcpkg"
+            "/usr/local/vcpkg"
+            "/opt/vcpkg")
+        # Program Files 单独判断：该环境变量在 64 位进程里指向 "C:/Program Files"，
+        # 直接拼字符串即可，无需处理带括号的变量名写法
+        if(EXISTS "$ENV{ProgramFiles}/vcpkg/scripts/buildsystems/vcpkg.cmake")
+            list(APPEND _commonnet_candidates "$ENV{ProgramFiles}/vcpkg")
+        endif()
+        foreach(_commonnet_candidate IN LISTS _commonnet_candidates)
+            if(_commonnet_candidate AND EXISTS "${_commonnet_candidate}/scripts/buildsystems/vcpkg.cmake")
+                set(_commonnet_vcpkg_root "${_commonnet_candidate}")
+                break()
+            endif()
+        endforeach()
+    endif()
+
+    # ④ PATH 上的 vcpkg.exe：回溯两层即安装根（<root>/vcpkg.exe 或 <root>/x64/vcpkg.exe）
+    if(NOT _commonnet_vcpkg_root)
+        find_program(COMMONNET_VCPKG_EXECUTABLE NAMES vcpkg vcpkg.exe)
+        if(COMMONNET_VCPKG_EXECUTABLE)
+            get_filename_component(_commonnet_p1 "${COMMONNET_VCPKG_EXECUTABLE}" DIRECTORY)
+            get_filename_component(_commonnet_p2 "${_commonnet_p1}" DIRECTORY)
+            foreach(_commonnet_candidate IN ITEMS "${_commonnet_p1}" "${_commonnet_p2}")
+                if(EXISTS "${_commonnet_candidate}/scripts/buildsystems/vcpkg.cmake")
+                    set(_commonnet_vcpkg_root "${_commonnet_candidate}")
+                    break()
+                endif()
+            endforeach()
+        endif()
+    endif()
+
+    # 命中则启用；未命中不立即失败，留给下面 find_package(Utils) 决定
+    # （单配置生成器如 Ninja 必须在 project() 之前设定工具链，多配置生成器可稍后再找）
+    if(_commonnet_vcpkg_root)
+        # 统一成绝对路径：万一 VCPKG_ROOT 给的是相对路径，写进工具链变量后
+        # 会相对"构建目录"解析，换构建目录就失效，必须在写入前归一化
+        get_filename_component(_commonnet_vcpkg_root "${_commonnet_vcpkg_root}" ABSOLUTE)
+        set(CMAKE_TOOLCHAIN_FILE "${_commonnet_vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
+            CACHE FILEPATH "vcpkg 工具链文件（由 CMakeLists.txt 自动探测得到）")
+        message(STATUS "已自动探测到 vcpkg：${_commonnet_vcpkg_root}")
+    else()
+        message(STATUS "未探测到 vcpkg：将先在系统默认位置查找 Utils / Boost")
+    endif()
+
 endif() # 工具链探测结束
 
 set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "使用 vcpkg classic 已安装依赖" FORCE) # 关闭 manifest 模式：本项目用 vcpkg classic（vcpkg install 装到全局 installed/<triplet>），不引入 vcpkg.json
@@ -68,18 +152,54 @@ option(COMMONNET_BUILD_EXAMPLES "构建 Server/Client 示例可执行文件" ON)
 set(CMAKE_CXX_STANDARD 17) # 全工程统一 C++17（用到了 std::atomic、结构化绑定、if constexpr 等）
 set(CMAKE_CXX_STANDARD_REQUIRED ON) # 编译器不支持 C++17 时直接报错，而不是悄悄降级到旧标准
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES) # 单配置生成器（Ninja / Makefiles）下、且调用方没指定构建类型时
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE) # 兜底为 Release；VS 这类多配置生成器由 --config 决定，不走这一支
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "构建类型") # 兜底为 Release；VS 这类多配置生成器由 --config 决定，不走这一支。不加 FORCE，调用方显式指定优先
 endif() # 构建类型兜底结束
+
+# 生成 compile_commands.json：编辑器/语言服务器（clangd、C/C++ 扩展等）据此拿到
+# 精确的 -I / -D，无需再手工维护 c_cpp_properties.json 之类的 IDE 专用文件。
+# 顶层设置对 add_subdirectory 也生效；MSVC 的 cl 不直接消费该文件，但生成它无害。
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 安装目录变量（CMAKE_INSTALL_INCLUDEDIR / CMAKE_INSTALL_LIBDIR）在本文件前段
 # 就会写进目标的 INSTALL_INTERFACE，故在定义目标之前先引入
 include(GNUInstallDirs) # 引入 GNU 标准安装目录变量：include / lib / bin（Windows 上同样适用，且可被 -DCMAKE_INSTALL_LIBDIR=... 覆盖）
 
-# 查找依赖库（均来自本机 vcpkg）
-#   Utils —— 本工程的前置依赖库，由 vcpkg 的 utils 端口提供，导入目标 Utils::Utils
-#   Boost —— 提供 asio / system / thread
-find_package(Utils CONFIG REQUIRED) # 找 vcpkg 的 utils 包（share/utils/UtilsConfig.cmake），得到导入目标 Utils::Utils；找不到立即报错
-find_package(Boost CONFIG REQUIRED COMPONENTS system thread) # 找 vcpkg 的 Boost（CONFIG 模式），只要 system / thread 两个组件；asio 是纯头文件，随 boost-headers 提供
+# ── 查找依赖库：Utils（前置库，vcpkg 的 utils 端口）与 Boost ──────
+#   Utils —— 导入目标 Utils::Utils，提供 Utils.h / Message.h / UtilsExport.h
+#   Boost —— 提供 asio（纯头文件）与 system
+#
+# 两级查找：先按调用方给定的路径找；找不到再尝试从 vcpkg 安装目录补一条搜索路径。
+# 这样"VCPKG_ROOT 指向别处"或"调用方自己指定了工具链"的情况都能兼容。
+find_package(Utils CONFIG QUIET)
+
+if(NOT Utils_FOUND)
+    # 从工具链路径回溯 vcpkg 安装根（工具链是 <root>/scripts/buildsystems/vcpkg.cmake）
+    if(CMAKE_TOOLCHAIN_FILE MATCHES "^(.*)/scripts/buildsystems/vcpkg\\.cmake$")
+        set(_commonnet_vcpkg_from_tc "${CMAKE_MATCH_1}")
+        if(NOT VCPKG_TARGET_TRIPLET)
+            set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "vcpkg 三元组")
+        endif()
+        list(APPEND CMAKE_PREFIX_PATH "${_commonnet_vcpkg_from_tc}/installed/${VCPKG_TARGET_TRIPLET}")
+        find_package(Utils CONFIG QUIET)
+    endif()
+endif()
+
+if(NOT Utils_FOUND)
+    message(FATAL_ERROR
+        "未找到 Utils 前置库（vcpkg 的 utils 端口，提供 Utils.h / Message.h / UtilsExport.h）。\n"
+        "请任选一种方式解决：\n"
+        "  1. 安装依赖（推荐）：\n"
+        "         vcpkg install utils:x64-windows boost-asio:x64-windows boost-system:x64-windows\n"
+        "  2. 指定 vcpkg 位置（三种等价写法）：\n"
+        "         cmake -B build -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake\n"
+        "         set VCPKG_ROOT=<vcpkg>  然后重新配置\n"
+        "         cmake -B build -DCMAKE_PREFIX_PATH=<vcpkg>/installed/x64-windows\n"
+        "  3. Utils 装在别处：cmake -B build -DCMAKE_PREFIX_PATH=<Utils 安装前缀>")
+endif()
+
+# Boost：只需要 system。asio 是纯头文件，随 boost-headers 提供，无需组件名。
+# 注意：不要声明 project 里没用到的组件（例如 thread）—— vcpkg 会因此拉入多余依赖。
+find_package(Boost CONFIG REQUIRED COMPONENTS system)
 
 # ── 公共属性封装（避免三个库重复书写）────────────────────
 # 所有公开头文件都通过 asio，故 Windows 宏需以 PUBLIC 传播给使用者
@@ -132,7 +252,7 @@ common_net_options(CommonNetCore) # 套用公共属性（C++17 / Windows 宏 / M
 target_include_directories(CommonNetCore PUBLIC # PUBLIC：自己编译要用，使用者也要（NetConnection.h 是公开头文件）
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/connon/include> # 构建期：直接用源码树里的 connon/include，改头文件即时生效
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/Common/Net/Core>) # 安装后：<prefix>/include/Common/Net/Core
-target_link_libraries(CommonNetCore PUBLIC CommonUtils Boost::system Boost::thread) # PUBLIC：这三个依赖会随 Common::Net::Core 一起传递给下游
+target_link_libraries(CommonNetCore PUBLIC CommonUtils Boost::system) # PUBLIC：依赖会随 Common::Net::Core 一起传递给下游
 add_library(Common::Net::Core ALIAS CommonNetCore) # 构建期别名
 # 导出名对齐构建期别名，使用者统一用 Common::Net::Core
 set_target_properties(CommonNetCore PROPERTIES EXPORT_NAME Net::Core) # 导出名 Net::Core → 下游即 Common::Net::Core
@@ -204,6 +324,12 @@ add_custom_target(CommonNetStageHeaders ALL # ALL：纳入默认构建，每次�
     ${COMMONNET_STAGE_COMMANDS} # 上面累积的复制命令
     COMMENT "同步公开头文件到 .lib 同级的 include/（平铺 + 分层各一份）" # 构建时打印的一行说明
     VERBATIM) # VERBATIM：参数原样传递，避免路径中的空格/分号被额外解释
+
+# 显式声明依赖：头文件同步必须在三个库构建完成之后进行。
+# 目标命令里虽然用到了 $<TARGET_FILE_DIR:CommonNetCore>，但那只是"取值"，
+# 不会建立构建顺序依赖；并行构建（cmake --build build --parallel）时若无此行，
+# 同步与库编译可能交错，产物目录会短暂出现"新头文件 + 旧库"的组合。
+add_dependencies(CommonNetStageHeaders CommonNetCore CommonNetServer CommonNetClient)
 
 # ── 示例可执行文件 ──────────────────────────────────────
 if(COMMONNET_BUILD_EXAMPLES) # 开关打开时才进入子目录
