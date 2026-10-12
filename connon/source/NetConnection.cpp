@@ -70,22 +70,7 @@ namespace Net
         // 设置消息ID
         this->msg_id = msg_id;
 
-        // 计算出缓存空间
-        total_len = max_len;
-
-        // 防御性检查：max_len 必须为正数
-        if (max_len <= 0)
-        {
-            throw std::invalid_argument("MsgNode: max_len 必须大于 0 ,当前total_len值为" + total_len);
-        }
-        // 申请缓存
-        buf = new char[total_len + 1];
-
-        // 初始化开辟的空间
-        std::memset(buf, '\0', static_cast<std::size_t>(total_len));
-
-        // 给最后一个空间为'\0'避免超出空间
-        buf[total_len] = '\0';
+        clear(max_len);
     }
     /// @brief      获取缓存区指针
     /// @return     指向缓冲区首地址的指针
@@ -160,6 +145,40 @@ namespace Net
 
         // 将读取指针复位
         cur_len = 0;
+    }
+
+    /// @brief 重新分配缓存区大小
+    /// @param len
+    /// @return
+    void MsgNode::clear(int len)
+    {
+        // 防御性检查：max_len 必须为正数
+        if (len <= 0)
+        {
+            throw std::invalid_argument("MsgNode: max_len 必须大于 0 ,当前total_len值为" + std::to_string(total_len));
+        }
+
+        if (buf != nullptr)
+        {
+            // 删除之前的缓存区大小
+            delete buf;
+        }
+
+        // 设置新的缓冲区大小
+        total_len = len;
+
+        // 申请新的缓冲区大小
+        buf = new char[total_len + 1];
+
+        // 检查是否申请成功
+        if (buf == nullptr)
+        {
+            throw std::invalid_argument("内存申请失败");
+        }
+        buf[total_len] = '\0';
+
+        // 清理大小
+        clear();
     }
 
     /// @brief      构造函数（有消息ID和长度）
@@ -320,11 +339,15 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        // 申请缓存
-        recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
-
         try
         {
+            if (recv == nullptr)
+            {
+                // 申请接收缓存
+                // 使用共享指针
+                recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
+            }
+
             recvNode->clear();
         }
         catch (boost::system::error_code ec)
@@ -410,13 +433,15 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        // 申请接收缓存
-        // 使用共享指针
-        recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
-
         // 尝试先清理,避免因为之前的缓存影响
         try
         {
+            if (recv == nullptr)
+            {
+                // 申请接收缓存
+                // 使用共享指针
+                recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
+            }
             // 清理缓存
             recvNode->clear();
         }

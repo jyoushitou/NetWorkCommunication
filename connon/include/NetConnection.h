@@ -66,6 +66,11 @@ namespace Net
         /// @note
         void clear();
 
+        /// @brief 重新分配缓存区大小
+        /// @param len
+        /// @return
+        void clear(int len);
+
         /// @brief      设置当前读取位置
         /// @param[in] len 当前读取到的位置
         /// @note
