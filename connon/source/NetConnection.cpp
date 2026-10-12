@@ -350,9 +350,9 @@ namespace Net
 
             recvNode->clear(HEAD_LENGTH);
         }
-        catch (boost::system::error_code ec)
+        catch (const std::exception& e)
         {
-            Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+            Utils::Out::outErr("数据清理失败，错误码！" + std::string(e.what()));
 
             // 申请失败，则关闭连接
             errToClose();
@@ -448,9 +448,9 @@ namespace Net
             // 清理缓存
             recvNode->clear(msg_len);
         }
-        catch (boost::system::error_code ec)
+        catch (const std::exception& e)
         {
-            Utils::Out::outErr("数据清理失败，错误码！" + ec.value());
+            Utils::Out::outErr("数据清理失败，错误码！" + std::string(e.what()));
 
             errToClose();
 
@@ -595,9 +595,9 @@ namespace Net
                                       // 启动发送队列
                                       doSend();
                                   }
-                                  catch (boost::system::error_code ec)
+                                  catch (const std::exception& e)
                                   {
-                                      Utils::Out::outErr("出现错误" + ec.value());
+                                      Utils::Out::outErr("出现错误" + std::string(e.what()));
 
                                       errToClose();
                                   }
@@ -649,7 +649,6 @@ namespace Net
                                      if (ec)
                                      {
                                          Utils::Out::outErr("发送错误，值为：" + ec.what());
-                                         sending = false;
                                          errToClose();
                                          return;
                                      }
