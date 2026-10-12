@@ -57,7 +57,7 @@ namespace Net
 
     /// @brief      构造函数（有消息ID和长度）
     /// @details    指定消息ID与缓存长度，并按长度申请缓冲区
-    /// @param[in] msg_id_ 消息全局唯一ID
+    /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] max_len 缓存的最大长度
     /// @warning    禁止传非正数，否则缓冲区申请失败
     /// @note
@@ -111,11 +111,11 @@ namespace Net
     }
 
     /// @brief      设置消息ID
-    /// @param[in] msg_id_ 消息全局唯一ID
+    /// @param[in] msg_id 消息全局唯一ID
     /// @note
-    void MsgNode::setID(unsigned long long msg_id_)
+    void MsgNode::setID(unsigned long long msg_id)
     {
-        msg_id = msg_id_;
+        this->msg_id = msg_id;
     }
 
     /// @brief      析构函数
@@ -348,7 +348,7 @@ namespace Net
                 recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
             }
 
-            recvNode->clear();
+            recvNode->clear(HEAD_LENGTH);
         }
         catch (boost::system::error_code ec)
         {
@@ -442,8 +442,11 @@ namespace Net
                 // 使用共享指针
                 recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
             }
+
+            // 设置当前的缓冲区
+            recvNode->setID(msg_id);
             // 清理缓存
-            recvNode->clear();
+            recvNode->clear(msg_len);
         }
         catch (boost::system::error_code ec)
         {

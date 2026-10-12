@@ -50,11 +50,11 @@ namespace Net
 
         /// @brief      构造函数（有消息ID和长度）
         /// @details    指定消息ID与缓存长度
-        /// @param[in] msg_id_ 消息全局唯一ID
+        /// @param[in] msg_id 消息全局唯一ID
         /// @param[in] max_len 缓存的最大长度
         /// @warning    禁止传非正数
         /// @note
-        MsgNode(unsigned long long msg_id_, int max_len);
+        MsgNode(unsigned long long msg_id, int max_len);
 
         /// @brief      析构函数
         /// @details    释放消息体缓存
@@ -77,9 +77,9 @@ namespace Net
         void setCurLen(int len);
 
         /// @brief      设置消息ID
-        /// @param[in] msg_id_ 消息全局唯一ID
+        /// @param[in] msg_id 消息全局唯一ID
         /// @note
-        void setID(unsigned long long msg_id_);
+        void setID(unsigned long long msg_id);
 
         /// @brief      获取缓存区指针
         /// @return     指向缓冲区首地址的指针
