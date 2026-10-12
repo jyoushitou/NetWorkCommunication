@@ -99,8 +99,6 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE) # 调用方没有显式指定工具链时�
 
 endif() # 工具链探测结束
 
-set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "使用 vcpkg classic 已安装依赖" FORCE) # 关闭 manifest 模式：本项目用 vcpkg classic（vcpkg install 装到全局 installed/<triplet>），不引入 vcpkg.json
-
 # ── 默认目标平台：固定 x64 ──────────────────────────────
 # 本工程必须编成 64 位：vcpkg 只装了 x64-windows 三元组，Boost / Utils 都是 x64 产物，
 # 下游（WebServer 等）同样是 x64。一旦编成 Win32(x86)，链接期会撞上
@@ -146,19 +144,22 @@ if(NOT COMMONNET_ALLOW_NON_X64) # 默认只放行 x64
 endif() # 架构校验结束
 
 # ── 构建选项 ────────────────────────────────────────────
-option(COMMONNET_BUILD_EXAMPLES "构建 Server/Client 示例可执行文件" ON) # 开关：默认编译 examples 下的 Server / Client 示例，可用 -DCOMMONNET_BUILD_EXAMPLES=OFF 关闭
-# 用 -DBUILD_SHARED_LIBS=ON 可切换为动态库，默认为静态库
+option(COMMONNET_BUILD_EXAMPLES "构建 Server/Client 示例可执行文件" ON) # 默认编译 examples 下的示例，可用 -DCOMMONNET_BUILD_EXAMPLES=OFF 关闭
+# 库类型由 CMake 内置的 BUILD_SHARED_LIBS 控制（默认未定义 = 静态库），
+# 无需在此声明：用 -DBUILD_SHARED_LIBS=ON 即可切为动态库。
 
-set(CMAKE_CXX_STANDARD 17) # 全工程统一 C++17（用到了 std::atomic、结构化绑定、if constexpr 等）
-set(CMAKE_CXX_STANDARD_REQUIRED ON) # 编译器不支持 C++17 时直接报错，而不是悄悄降级到旧标准
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES) # 单配置生成器（Ninja / Makefiles）下、且调用方没指定构建类型时
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "构建类型") # 兜底为 Release；VS 这类多配置生成器由 --config 决定，不走这一支。不加 FORCE，调用方显式指定优先
-endif() # 构建类型兜底结束
+set(CMAKE_CXX_STANDARD 17) # 全工程统一 C++17（用到了 std::atomic、if constexpr 等）
+set(CMAKE_CXX_STANDARD_REQUIRED ON) # 编译器不支持 C++17 时直接报错，而不是悄悄降级
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES) # 仅单配置生成器、且调用方未指定时
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "构建类型") # 兜底 Release；不加 FORCE，调用方显式指定优先
+endif()
 
-# 生成 compile_commands.json：编辑器/语言服务器（clangd、C/C++ 扩展等）据此拿到
-# 精确的 -I / -D，无需再手工维护 c_cpp_properties.json 之类的 IDE 专用文件。
-# 顶层设置对 add_subdirectory 也生效；MSVC 的 cl 不直接消费该文件，但生成它无害。
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# 生成 compile_commands.json 供 clangd / C/C++ 扩展取得精确的 -I / -D，
+# 从而无需维护 IDE 专用配置文件。该变量只对 Ninja / Makefile 生成器有效，
+# 多配置生成器（Visual Studio）下设置它会被 CMake 忽略并给出告警，故加条件。
+if(CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
 
 # 安装目录变量（CMAKE_INSTALL_INCLUDEDIR / CMAKE_INSTALL_LIBDIR）在本文件前段
 # 就会写进目标的 INSTALL_INTERFACE，故在定义目标之前先引入
@@ -173,11 +174,14 @@ include(GNUInstallDirs) # 引入 GNU 标准安装目录变量：include / lib / 
 find_package(Utils CONFIG QUIET)
 
 if(NOT Utils_FOUND)
-    # 从工具链路径回溯 vcpkg 安装根（工具链是 <root>/scripts/buildsystems/vcpkg.cmake）
+    # 从工具链路径回溯 vcpkg 安装根（工具链形如 <root>/scripts/buildsystems/vcpkg.cmake），
+    # 补一条 installed/<triplet> 搜索路径后重试。
+    # 注意：这里必须显式给出三元组作为兜底 —— 不能依赖 vcpkg 工具链里已经算好的
+    # VCPKG_TARGET_TRIPLET，因为工具链在 project() 中才运行，此刻它可能尚未生效。
     if(CMAKE_TOOLCHAIN_FILE MATCHES "^(.*)/scripts/buildsystems/vcpkg\\.cmake$")
         set(_commonnet_vcpkg_from_tc "${CMAKE_MATCH_1}")
         if(NOT VCPKG_TARGET_TRIPLET)
-            set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "vcpkg 三元组")
+            set(VCPKG_TARGET_TRIPLET "x64-windows" CACHE STRING "vcpkg 三元组（仅用于依赖搜索兜底）")
         endif()
         list(APPEND CMAKE_PREFIX_PATH "${_commonnet_vcpkg_from_tc}/installed/${VCPKG_TARGET_TRIPLET}")
         find_package(Utils CONFIG QUIET)
@@ -213,30 +217,20 @@ function(common_net_options target) # 定义辅助函数：给目标统一加语
     endif() # MSVC 分支结束
 endfunction() # common_net_options 定义结束
 
-# ── 工具库：Utils（前置依赖库，改为消费本机 vcpkg 安装的 utils 包）──
-# 旧写法：把 Utils 工程编出来的预编译静态库（lib/Utils.lib + lib/Utilsd.lib）
-# 用 IMPORTED 目标 + 手写 Release/Debug 映射接进来，还得自己下发
-# Utils_STATIC_DEFINE、自己安装库与头文件——源文件与产物容易脱节，
-# Debug/Release 与 /MD、/MDd 的匹配也全靠人工维护。
-#
-# 现写法：直接消费 vcpkg 里的 utils 端口：
-#     vcpkg install utils
-#     find_package(Utils CONFIG REQUIRED)   ->   导入目标 Utils::Utils
-# 导入目标自带全部必要信息，本工程不再手工下发任何 Utils 宏或包含目录：
+# ── 工具库：Utils（前置依赖库，消费 vcpkg 的 utils 包）──────────
+# Utils 是本工程的前置库，由 vcpkg 的 utils 端口提供，导入目标 Utils::Utils。
+# 该导入目标自带全部必要信息，本工程无需手工下发任何宏或包含目录：
 #   - INTERFACE_INCLUDE_DIRECTORIES ：Utils.h / Message.h / UtilsExport.h
 #   - INTERFACE_COMPILE_FEATURES    ：cxx_std_17
 #   - INTERFACE_LINK_LIBRARIES      ：Threads::Threads
 #   - 静态三元组（x64-windows-static）下另带 Utils_STATIC_DEFINE
 #
-# 默认三元组 x64-windows 下 Utils::Utils 是**动态库**：
-#   Release -> lib/Utils.lib + bin/Utils.dll
-#   Debug   -> debug/lib/Utils.lib + debug/bin/Utils.dll
-# 两份产物由导入目标按当前配置自动选择，既不会出现「VS 多配置生成器下
-# Debug 静默退回 Release」的隐患，也不必再操心 RuntimeLibrary 与
-# _ITERATOR_DEBUG_LEVEL 是否一致（原来的 LNK2038 风险随之消失）。
-# 正因如此，动态库场景**不能再定义 Utils_STATIC_DEFINE**：那会让 Utils_API
-# 展开为空，Utils::serviceID 这类导出数据退化成普通 extern（链接期 LNK2019），
-# 使用方若自己补定义更会直接触发 C2491 —— 该符号现在由 Utils.dll 导出。
+# 默认三元组 x64-windows 下 Utils::Utils 是**动态库**（bin/Utils.dll），
+# Release / Debug 两份产物由导入目标按当前配置自动选择，因此既不会出现
+# 「VS 多配置生成器下 Debug 静默退回 Release」，也不必操心 RuntimeLibrary 与
+# _ITERATOR_DEBUG_LEVEL 是否一致（原 LNK2038 风险消失）。
+# 正因如此，动态库场景**不能定义 Utils_STATIC_DEFINE**：那会让 Utils_API 展开为空，
+# Utils::serviceID 这类导出数据退化成普通 extern（链接期 LNK2019）。
 #
 # 对外名字保持 Common::Utils 不变：它现在只是一个把 Utils::Utils 转发出去的
 # INTERFACE 目标，三个库的链接行与下游用法都无需改动。
@@ -259,7 +253,7 @@ set_target_properties(CommonNetCore PROPERTIES EXPORT_NAME Net::Core) # 导出�
 
 # ── 服务端库 ────────────────────────────────────────────
 add_library(CommonNetServer # 服务端库（默认静态库）
-    Server/source/NetServer.cpp) # 实现文件：accept、会话管理、线程安全消息队列、WaitForMessage
+    Server/source/NetServer.cpp) # 实现文件：accept、会话管理、会话超时巡检与回收
 common_net_options(CommonNetServer) # 套用公共属性
 target_include_directories(CommonNetServer PUBLIC # PUBLIC：NetServer.h 是公开头文件
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Server/include> # 构建期包含目录

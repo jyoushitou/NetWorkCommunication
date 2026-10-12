@@ -1,10 +1,12 @@
 # NetWorkCommunication
 
-![C++](https://img.shields.io/badge/C%2B%2B-17-blue)
-![Boost.Asio](https://img.shields.io/badge/Boost-Asio-orange)
-![CMake](https://img.shields.io/badge/build-CMake-brightgreen)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)
-![License](https://img.shields.io/badge/license-MIT-green)
+![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
+![Boost.Asio](https://img.shields.io/badge/Boost-Asio-orange.svg)
+![CMake](https://img.shields.io/badge/CMake-%E2%89%A5%203.16-brightgreen.svg)
+![vcpkg](https://img.shields.io/badge/deps-vcpkg-0078d4.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
+![Type](https://img.shields.io/badge/library-static%20%7C%20shared-informational.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 一个基于 Boost.Asio 的 C++ 网络通讯库,采用 `io_context` 单线程事件循环模型,提供异步 TCP 收发与业务逻辑解耦的回调式接口。
 
@@ -20,11 +22,11 @@
 - 每个连接一个 `io_context`，配合 `boost::asio::post` 实现跨线程安全发送与关闭
 - 消息头固定 12 字节：8 字节消息 ID + 4 字节消息长度，支持自定义业务 ID
 - 跨平台字节序转换（自定义 `htonll` / `ntohll`，兼容 Windows / Linux）
-- 发送队列自动串行化，`sending` 标志避免并发写 socket；`close()` 会先发完队列再关闭（优雅关闭）
+- 发送队列自动串行化，`sending` 标志避免并发写 socket；`stopToClose()` 会先发完队列再关闭（优雅关闭），`errToClose()` 则直接清空队列立即关闭
 - 独立的发送/接收缓冲区类（`MsgNode` / `RecvNode` / `SendNode`）
-- 连接基类 `Net::Connection`（继承 `enable_shared_from_this`），封装 `readHead` / `readBody` / `doSend` / `actuallyClose`
+- 连接基类 `Net::Connection`（继承 `enable_shared_from_this`），封装 `readHead` / `readBody` / `doSend` / `send` / `stopToClose` / `errToClose`（内部经 `connectionClose` → `socketClose` 完成关闭）
 - 服务端 `Net::Server::Server`：`start()` 同时启动监听与失效会话监控线程，`Stop()` 幂等优雅退出
-- 服务端会话 `Net::Server::Session`：回调式业务处理（`HandleFunction` 返回字符串即回复内容），空闲超时自动断开（默认 60s）
+- 服务端会话 `Net::Server::Session`：回调式业务处理（`HandleFunction` 签名为 `void(const std::shared_ptr<Session>&, const unsigned long long&, const std::string&)`，回调内调用 `session->reply(msg_id, msg)` 回复），空闲超时自动断开（默认 60s）
 - 客户端 `Net::Client::Client`：`Connect()` 异步解析并连接（`resolver` 为成员保证生命周期），连接成功后自动发送连接测试并开始读
 - 客户端支持多连接并行（每连接独立 `io_context` + 独立线程）
 - `Common` / `Utils` / `Net` 分层命名，构建期别名与安装后导出名一致，支持 `find_package(CommonNet)` 复用
@@ -34,8 +36,8 @@
 
 - CMake >= 3.16
 - C++17
-- Boost（asio 头文件库 + `system` / `thread` 组件）
-  - 安装：`vcpkg install boost-asio boost-system boost-thread`
+- Boost（asio 纯头文件库 + `system` 组件）
+  - 安装：`vcpkg install boost-asio boost-system`
 - **Utils**：本工程的前置依赖库（日志 `Utils::Out` / 时间 `Utils::Time` / 优雅退出 `Utils::Exit`），由本机 vcpkg 的 **`utils` 端口**提供
   - 安装：`vcpkg install utils`
   - CMake 侧通过 `find_package(Utils CONFIG REQUIRED)` 引入导入目标 `Utils::Utils`
@@ -102,8 +104,8 @@ NetWorkCommunication/
 ### 使用 vcpkg 安装依赖
 
 ```bash
-# Utils 是本工程的前置依赖库，Boost 提供 asio 头文件与 system / thread 组件
-vcpkg install utils boost-asio boost-system boost-thread
+# Utils 是本工程的前置依赖库，Boost 提供 asio 头文件与 system 组件
+vcpkg install utils boost-asio boost-system
 ```
 
 ### 设置 vcpkg 工具链（CMakeLists 自动检测）
@@ -166,7 +168,7 @@ target_link_libraries(你的目标 PRIVATE Common::Net::Core)
 ```
 
 > 下游工程同样用 vcpkg 工具链配置（`-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`）：
-> `CommonNetConfig.cmake` 会自行 `find_dependency(Boost CONFIG COMPONENTS system thread)` 与 **`find_dependency(Utils CONFIG)`**，
+> `CommonNetConfig.cmake` 会自行 `find_dependency(Boost CONFIG COMPONENTS system)` 与 **`find_dependency(Utils CONFIG)`**，
 > 把 vcpkg 的 Boost 与 utils 包一起找回来。Utils 的库与头文件由 vcpkg 提供，
 > **不再随 CommonNet 包安装**（安装目录里只有 CommonNet 自己的三个静态库与三个公开头文件）。
 
@@ -194,7 +196,7 @@ target_link_libraries(你的目标 PRIVATE Common::Net::Core)
 
 ### 服务端
 
-服务端的业务处理通过 `HandleFunction` 回调完成：回调在 IO 线程中执行，**返回值即作为回复内容发回客户端**。
+服务端的业务处理通过 `HandleFunction` 回调完成：回调在 IO 线程中执行，签名为 `void(const std::shared_ptr<Session>& session, const unsigned long long& msg_id, const std::string& msg)`，**回复通过回调内的 `session->reply(msg_id, msg)` 主动发出**（库不会自动回包）。
 
 ```cpp
 #include "NetServer.h"
@@ -203,14 +205,16 @@ target_link_libraries(你的目标 PRIVATE Common::Net::Core)
 boost::asio::io_context io;
 boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), 26990);
 
-// 业务回调：参数为（会话, 消息体），返回值作为回复内容
+// 业务回调：参数为（会话, 消息ID, 消息体），无返回值；回复需显式调用 session->reply
 auto handler = std::make_shared<Net::Server::HandleFunction>(
-    [](const std::shared_ptr<Net::Server::Session>& session, const std::string& msg) -> std::string
-    {
-        Utils::Out::outMsg("收到客户端消息: " + msg);
-        // TODO: 在这里编写你的业务处理逻辑
-        return "服务器已收到！";
-    });
+    [](const std::shared_ptr<Net::Server::Session>& session, const unsigned long long& msg_id,
+           const std::string& msg)
+        {
+            Utils::Out::outMsg("收到客户端消息: " + msg);
+            // TODO: 在这里编写你的业务处理逻辑
+            // 用收到的同一 msg_id 回复，便于客户端追踪链路（库不会自动回包）
+            session->reply(msg_id, "服务器已经收到消息");
+        });
 
 // 创建服务器（最后一个参数为会话空闲超时秒数，默认 60）
 auto server = std::make_shared<Net::Server::Server>(io, ep, handler);
@@ -308,20 +312,21 @@ Utils::serviceID = RPCGateway;   // 直接赋值，禁止在消费侧再次定�
 
 ### 2. 服务端业务处理
 
-业务逻辑写在创建 `Server` 时传入的 `HandleFunction` 回调里。回调在 IO 线程中执行，**返回的字符串即回复内容**：
+业务逻辑写在创建 `Server` 时传入的 `HandleFunction` 回调里。回调在 IO 线程中执行，**无返回值，回复需在回调内调用 `session->reply(msg_id, msg)` 主动发出**：
 
 ```cpp
 auto handler = std::make_shared<Net::Server::HandleFunction>(
-    [](const std::shared_ptr<Net::Server::Session>& session, const std::string& msg) -> std::string
+    [](const std::shared_ptr<Net::Server::Session>& session, const unsigned long long& msg_id,
+       const std::string& msg)
     {
         Utils::Out::outMsg("收到客户端消息: " + msg);
 
         // ===== 自定义业务逻辑开始 =====
-        // 可基于 msg 内容做路由、解析 JSON、查询数据库……
-        // 若需主动推送多条消息，可调用 session->reply(msg_id, data)
+        // 可基于 msg_id / msg 内容做路由、解析 JSON、查询数据库……
+        // 回复（以及需要主动推送多条消息）都调用 session->reply(msg_id, data)
         // ===== 自定义业务逻辑结束 =====
 
-        return "处理结果";   // 作为回复发回客户端
+        session->reply(msg_id, "处理结果");   // 作为回复发回客户端
     });
 
 auto server = std::make_shared<Net::Server::Server>(io, ep, handler);
@@ -371,7 +376,7 @@ client->toSend(1001, "查询订单: 20240001");
 
 2. **跨线程发送**：`Connection::toSend()` 先做空消息 / 超长校验（非法即抛异常），`send()` 内部 `post` 到 socket executor，在 IO 线程中构建 `SendNode`（写 8 字节 ID + 4 字节长度 + 消息体）并入队。
 
-3. **发送队列**：`sendQueue` 保存待发送消息，`sending` 标志防止并发写；发送完成后自动取出下一条继续发送。`close()` 请求后若队列仍有数据，会先发完再关闭（优雅关闭）；异步写回调中通过比对队首节点避免 `deque` 空弹出的 Debug 断言。
+3. **发送队列**：`sendQueue` 保存待发送消息，`sending` 标志防止并发写；发送完成后自动取出下一条继续发送。`stopToClose()` 请求后若队列仍有数据，会先发完再关闭（优雅关闭）；异步写回调中通过比对队首节点避免 `deque` 空弹出的 Debug 断言。
 
 4. **消息缓存类**：`MsgNode` 内部维护 `char* buf`，构造时分配 `total_len + 1` 字节并将末尾置 `'\0'`，防止字符串越界；`RecvNode` / `SendNode` 继承自它。带 ID 的构造为日志追踪提供支持。
 
@@ -388,7 +393,7 @@ client->toSend(1001, "查询订单: 20240001");
 
 ## 已知问题与修复记录
 
-- **Utils 前置库改为消费 vcpkg 的 `utils` 包**：原先工程把 Utils 工程编出的预编译静态库（`lib/Utils.lib` + `lib/Utilsd.lib`）用 IMPORTED 目标手工接入，并自己下发 `Utils_STATIC_DEFINE`、自己安装库与头文件——产物来源与 `/MD`、`/MDd` 的匹配全靠人工维护，Debug 配置一旦缺少对应产物就会静默退回 Release 版并报 `LNK2038`。现改为 `find_package(Utils CONFIG REQUIRED)` + `Utils::Utils`：包含目录、C++17 要求、`Threads::Threads`、以及静态形态下的 `Utils_STATIC_DEFINE` 都由导入目标自动下发，Release/Debug 两份产物（`Utils.dll` / `debug/bin/Utils.dll`）按配置自动选择。`CommonUtils` 保留为 `Common::Utils` 的转发目标，三个库与下游用法不变；安装包不再携带 Utils 的库与头文件，改由 `CommonNetConfig.cmake` 中新增的 `find_dependency(Utils CONFIG)` 找回。`Message.h` / `Utils.h` 也随该包提供，不再位于 `connon/`。
+- **Utils 前置库改为消费 vcpkg 的 `utils` 包**：原先工程把 Utils 工程编出的预编译静态库（`lib/Utils.lib` + `lib/Utilsd.lib`）用 IMPORTED 目标手工接入，并自己下发 `Utils_STATIC_DEFINE`、自己安装库与头文件——产物来源与 `/MD`、`/MDd` 的匹配全靠人工维护，Debug 配置一旦缺少对应产物就会静默退回 Release 版并报 `LNK2038`。现改为 `find_package(Utils CONFIG REQUIRED)` + `Utils::Utils`：包含目录、C++17 要求、`Threads::Threads`、以及静态形态下的 `Utils_STATIC_DEFINE` 都由导入目标自动下发，Release/Debug 两份产物（`Utils.dll`/`debug/bin/Utils.dll`）按配置自动选择。`CommonUtils`保留为`Common::Utils`的转发目标，三个库与下游用法不变；安装包不再携带 Utils 的库与头文件，改由`CommonNetConfig.cmake`中新增的`find_dependency(Utils CONFIG)` 找回。`Message.h`/`Utils.h`也随该包提供，不再位于`connon/`。
 
 - **`Utils::serviceID` 重复定义**（`examples/Server|Client/main.cpp`）：旧版 Utils 头文件里 `serviceID` 只有 `extern` 声明、库里没有定义，示例程序只能自己补一份 `std::atomic<ServiceID> Utils::serviceID{ServiceID::Test};`。vcpkg 的 utils 包已由 `Utils.dll` 导出该符号（`extern Utils_API std::atomic<ServiceID> serviceID;`，消费侧展开为 `dllimport`），再给出定义会直接编译报错 `C2491`（绕过去也会 `LNK2005`），故两处自定义定义均已删除，改为运行时赋值 `Utils::serviceID = RPCGateway;`。
 
@@ -403,10 +408,9 @@ client->toSend(1001, "查询订单: 20240001");
 - **解析器生命周期问题**(`Client::Connect`):`async_resolve` 的 resolver 原为临时局部变量，异步解析期间对象销毁导致崩溃/未定义行为。已改为 `Client` 成员变量（`boost::asio::ip::tcp::resolver resolver;`）。
 
 - **Windows 控制台关闭时崩溃**:原在系统回调线程中直接调用 `Stop()`（内部 `boost::asio::post`），存在竞态风险。现由 `Utils::Exit` 统一：回调线程只设置退出事件唤醒主线程，由主线程安全执行 `Stop()` → `join()` 清理流程。
+- **关闭回调重复触发**:`Connection::socketClose()` 可能被 `readHead` 错误、`readBody` 错误、`stopToClose()` / `errToClose()` 等多次路径触发。已添加 `closeNotified` 标记（`std::atomic<bool>` + `exchange`），保证派生类的 `derivedToClose()` 只被调用一次。
 
-- **关闭回调重复触发**:`Connection::actuallyClose()` 可能被 `readHead` 错误、`readBody` 错误、`close()` 等多次路径触发。已添加 `closeNotified` 标记，保证 `toClosed()` 只被调用一次。
-
-- **关闭后继续读消息**:连接正在关闭（`closing=true`）时，`readHead` 解析到的消息直接丢弃并立即 `actuallyClose()`，避免对已关闭连接继续发起异步读。
+- **关闭后继续读消息**:连接正在关闭（`closing=true`）时，`readHead` 解析到的消息直接丢弃并调用 `stopToClose()` 走优雅关闭，避免对已关闭连接继续发起异步读（`readBody` 入口处也有同样的 `closing` 检查）。
 
 - **非 x64 平台静默混编**:VS 生成器 `-A Win32`、或在 32 位命令提示符中用 Ninja 配置都会悄悄编出 32 位产物，直到链接 vcpkg 的 x64 库才炸 `LNK1112`。已在根 CMakeLists.txt 于 `project()` 之前把平台钉成 x64，并在 `project()` 之后做 x64 兜底校验（`COMMONNET_ALLOW_NON_X64=ON` 可放行）。
 

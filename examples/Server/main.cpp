@@ -73,9 +73,9 @@ int main()
             {
                 io.run();
             }
-            catch (boost::system::error_code ec)
+            catch (const std::exception& e)
             {
-                Utils::Out::outMsg("网络线程出现错误" + ec.what());
+                Utils::Out::outMsg("网络线程出现错误" + std::string(e.what()));
             }
             catch (...)
             {
