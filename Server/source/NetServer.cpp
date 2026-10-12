@@ -35,6 +35,9 @@ namespace Net
             this->HF = HF;
             // 给timeout赋值初始化为60s
             this->timeout = timeout ? timeout : 60;
+
+            // 初始化时间
+            updateTime();
         }
 
         /// @brief      业务处理
