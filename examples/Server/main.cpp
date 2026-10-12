@@ -44,7 +44,8 @@ int main()
 
     // 业务回调：在 IO 线程中执行，返回值作为回复内容发回客户端
     auto handler = std::make_shared<Net::Server::HandleFunction>(
-        [](const std::shared_ptr<Net::Server::Session>& session, const int& msg_id, const std::string& msg)
+        [](const std::shared_ptr<Net::Server::Session>& session, const unsigned long long& msg_id,
+           const std::string& msg)
         {
             Utils::Out::outMsg("收到客户端消息: " + msg);
 
