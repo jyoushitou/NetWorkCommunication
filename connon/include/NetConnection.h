@@ -258,11 +258,15 @@ namespace Net
         boost::asio::io_context& ioc;
 
     private:
-        /// @brief      connection连接的正常关闭连接
+        /// @brief 推进关闭流程（IO 线程内执行，幂等；重复调用只有第一次生效）
         /// @details    向 IO 线程投递关闭请求，允许外部线程调用
         /// @warning    异步执行，调用后连接不再可用
         /// @note
         void connectionClose();
+
+        /// @brief 续接关闭流程（只由写完成回调调用：此时不再做 closing 早退判断）
+        /// @details
+        void continueClose();
 
         /// @brief      只关闭socket
         /// @details    关闭socket，并调用最后的虚函数
