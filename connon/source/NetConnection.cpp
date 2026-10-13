@@ -334,14 +334,9 @@ namespace Net
 
         try
         {
-            if (recvNode == nullptr)
-            {
-                // 申请接收缓存
-                // 使用共享指针
-                recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
-            }
-
-            recvNode->clear(HEAD_LENGTH);
+            // 申请接收缓存
+            // 使用共享指针
+            recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
         }
         catch (const std::exception& e)
         {
@@ -434,17 +429,9 @@ namespace Net
         // 尝试先清理,避免因为之前的缓存影响
         try
         {
-            if (recvNode == nullptr)
-            {
-                // 申请接收缓存
-                // 使用共享指针
-                recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
-            }
-
-            // 设置当前的缓冲区
-            recvNode->setID(msg_id);
-            // 清理缓存
-            recvNode->clear(msg_len);
+            // 申请接收缓存
+            // 使用共享指针
+            recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
         }
         catch (const std::exception& e)
         {
