@@ -247,6 +247,8 @@ namespace Net
         socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         socket.close(ec);
 
+        sending = false;
+
         // 防止多次通知关闭
         if (!closeNotified.exchange(true))
         {
@@ -402,6 +404,9 @@ namespace Net
                                         // 关闭连接
                                         stopToClose();
                                     }
+
+                                    // 启用读取消息体
+                                    readBody(msg_id, static_cast<int>(msg_len));
                                 });
     }
 
@@ -417,6 +422,8 @@ namespace Net
         if (closing)
         {
             Utils::Out::outErr("收到消息，但是正在关闭连接，拒绝接收消息");
+
+            // 启动关闭流程
             stopToClose();
             return;
         }
@@ -427,7 +434,7 @@ namespace Net
         // 尝试先清理,避免因为之前的缓存影响
         try
         {
-            if (recv == nullptr)
+            if (recvNode == nullptr)
             {
                 // 申请接收缓存
                 // 使用共享指针
