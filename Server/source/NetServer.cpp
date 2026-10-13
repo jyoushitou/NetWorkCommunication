@@ -349,6 +349,12 @@ namespace Net
 
             // 保活，不保存引用
             auto self = selfWeak.lock();
+
+            if (self == nullptr)
+            {
+                return;
+            }
+
             // 跨线程输入
             boost::asio::post(ioc,
                               [this, self]()
