@@ -136,7 +136,7 @@ namespace Net
         {
             throw std::invalid_argument("buf为悬空指针，请重新创建");
         }
-        else if (total_len > 0)
+        else if (total_len <= 0)
         {
             throw std::invalid_argument("total_len非法，当前total长度为" + total_len);
         }
@@ -161,7 +161,7 @@ namespace Net
         if (buf != nullptr)
         {
             // 删除之前的缓存区大小
-            delete buf;
+            delete[] buf;
         }
 
         // 设置新的缓冲区大小
@@ -170,11 +170,6 @@ namespace Net
         // 申请新的缓冲区大小
         buf = new char[total_len + 1];
 
-        // 检查是否申请成功
-        if (buf == nullptr)
-        {
-            throw std::invalid_argument("内存申请失败");
-        }
         buf[total_len] = '\0';
 
         // 清理大小
@@ -244,10 +239,6 @@ namespace Net
         {
             return;
         }
-        else
-        {
-            return;
-        }
 
         Utils::Out::outMsg("正在关闭socket");
 
@@ -255,6 +246,8 @@ namespace Net
         boost::system::error_code ec;
         socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         socket.close(ec);
+
+        sending = false;
 
         // 防止多次通知关闭
         if (!closeNotified.exchange(true))
@@ -290,11 +283,6 @@ namespace Net
         boost::asio::post(socket.get_executor(),
                           [this, self]()
                           {
-                              // 已经标记过在关闭状态
-                              if (closing)
-                              {
-                                  return;
-                              }
                               // 标记关闭状态
                               closing = true;
 
@@ -305,16 +293,13 @@ namespace Net
 
                               // 判断是否发送完毕或者在发送状态
                               // 不是：则进入断连阶段
-                              if (!sending && sendQueue.empty())
-                              {
-                                  // 启动关闭函数
-                                  socketClose();
-                              }
-                              // 不在发送状态且有消息，发送消息
-                              else
+                              if (sending && !sendQueue.empty())
                               {
                                   doSend();
+                                  return;
                               }
+                              // 启动关闭函数
+                              socketClose();
                           });
     }
 
@@ -341,14 +326,9 @@ namespace Net
 
         try
         {
-            if (recv == nullptr)
-            {
-                // 申请接收缓存
-                // 使用共享指针
-                recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
-            }
-
-            recvNode->clear(HEAD_LENGTH);
+            // 申请接收缓存
+            // 使用共享指针
+            recvNode = std::make_shared<RecvNode>(HEAD_LENGTH);
         }
         catch (const std::exception& e)
         {
@@ -411,6 +391,9 @@ namespace Net
                                         // 关闭连接
                                         stopToClose();
                                     }
+
+                                    // 启用读取消息体
+                                    readBody(msg_id, static_cast<int>(msg_len));
                                 });
     }
 
@@ -426,6 +409,8 @@ namespace Net
         if (closing)
         {
             Utils::Out::outErr("收到消息，但是正在关闭连接，拒绝接收消息");
+
+            // 启动关闭流程
             stopToClose();
             return;
         }
@@ -436,17 +421,9 @@ namespace Net
         // 尝试先清理,避免因为之前的缓存影响
         try
         {
-            if (recv == nullptr)
-            {
-                // 申请接收缓存
-                // 使用共享指针
-                recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
-            }
-
-            // 设置当前的缓冲区
-            recvNode->setID(msg_id);
-            // 清理缓存
-            recvNode->clear(msg_len);
+            // 申请接收缓存
+            // 使用共享指针
+            recvNode = std::make_shared<RecvNode>(msg_id, msg_len);
         }
         catch (const std::exception& e)
         {

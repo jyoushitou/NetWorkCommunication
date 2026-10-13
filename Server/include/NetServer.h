@@ -132,20 +132,10 @@ namespace Net
             /// @param[in] ep 监听的本地端点（地址与端口）
             /// @param[in] HF 业务处理回调（返回值作为回复内容发回客户端）
             /// @param[in] timeOut 会话空闲超时时间（秒），默认 60 秒
-            /// @warning    须保证 io 的生命周期长于本服务器
-            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut);
-
-            /// @brief      构造函数
-            /// @details    服务器的构造
-            /// @param[in] io 服务器的io_context
-            /// @param[in] ep 监听的本地端点（地址与端口）
-            /// @param[in] HF 业务处理回调（返回值作为回复内容发回客户端）
-            /// @param[in] timeOut 会话空闲超时时间（秒），默认 60 秒
             /// @param[in] checkTime 检查会话周期
             /// @warning    须保证 io 的生命周期长于本服务器
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut = 60, time_t checkTime = 60);
+                   long long timeOut = 60, long long checkTime = 60);
 
             /// @brief      析构函数
             /// @details    先停止服务器并回收清理线程，避免线程析构时未 join 触发 terminate
@@ -207,7 +197,7 @@ namespace Net
 
             /// @brief      运行状态标志
             /// @details    标识服务器当前是否正在运行
-            std::atomic<bool> running;
+            std::atomic<bool> running = false;
 
             /// @brief 回调的函数
             /// @details 整个服务器session的函数存储
@@ -219,7 +209,7 @@ namespace Net
 
             /// @brief 设置会话超时时间
             /// @details
-            time_t timeOut = 60;
+            long long timeOut = 60;
         };
     } // namespace Server
 } // namespace Net
