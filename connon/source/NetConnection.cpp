@@ -161,7 +161,7 @@ namespace Net
         if (buf != nullptr)
         {
             // 删除之前的缓存区大小
-            delete buf;
+            delete[] buf;
         }
 
         // 设置新的缓冲区大小
