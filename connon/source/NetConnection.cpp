@@ -136,7 +136,7 @@ namespace Net
         {
             throw std::invalid_argument("buf为悬空指针，请重新创建");
         }
-        else if (total_len > 0)
+        else if (total_len <= 0)
         {
             throw std::invalid_argument("total_len非法，当前total长度为" + total_len);
         }
@@ -170,11 +170,6 @@ namespace Net
         // 申请新的缓冲区大小
         buf = new char[total_len + 1];
 
-        // 检查是否申请成功
-        if (buf == nullptr)
-        {
-            throw std::invalid_argument("内存申请失败");
-        }
         buf[total_len] = '\0';
 
         // 清理大小
@@ -241,10 +236,6 @@ namespace Net
     {
         // 检查socket状态
         if (!closeSocket.exchange(true))
-        {
-            return;
-        }
-        else
         {
             return;
         }
