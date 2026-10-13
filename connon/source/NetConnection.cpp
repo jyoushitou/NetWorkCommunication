@@ -235,7 +235,7 @@ namespace Net
     void Connection::socketClose()
     {
         // 检查socket状态
-        if (!closeSocket.exchange(true))
+        if (closeSocket.exchange(true))
         {
             return;
         }
