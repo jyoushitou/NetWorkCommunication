@@ -135,7 +135,7 @@ namespace Net
             /// @param[in] checkTime 检查会话周期
             /// @warning    须保证 io 的生命周期长于本服务器
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut = 60, time_t checkTime = 60);
+                   long long timeOut = 60, long long checkTime = 60);
 
             /// @brief      析构函数
             /// @details    先停止服务器并回收清理线程，避免线程析构时未 join 触发 terminate
@@ -209,7 +209,7 @@ namespace Net
 
             /// @brief 设置会话超时时间
             /// @details
-            time_t timeOut = 60;
+            long long timeOut = 60;
         };
     } // namespace Server
 } // namespace Net

@@ -157,7 +157,7 @@ namespace Net
         /// @param[in] ep 监听的本地端点（地址与端口）
         /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF, long long timeOut, time_t checkTime)
+                       std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime)
             : ioc(io), acceptor(io)
         {
             // 打开连接
