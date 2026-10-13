@@ -298,6 +298,8 @@ namespace Net
         socketClose();
     }
 
+    /// @brief 续接关闭流程（只由写完成回调调用：此时不再做 closing 早退判断）
+    /// @details
     void Connection::continueClose()
     {
         // 只由写完成回调调用；未进入关闭流程时什么都不做
@@ -404,6 +406,8 @@ namespace Net
                                         Utils::Out::outErr("收到的消息的长度错误，请通知客户端修复后重试");
 
                                         errToClose();
+
+                                        return;
                                     }
 
                                     Utils::Out::outMsg("解析完成！ID：" + std::to_string(msg_id) + "，长度：" +
