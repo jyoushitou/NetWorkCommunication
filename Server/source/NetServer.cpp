@@ -150,18 +150,6 @@ namespace Net
         }
 
         //===Server===
-        /// @brief      构造函数
-        /// @details    服务器的构造
-        /// @param[in] io 服务器的io_context
-        /// @param[in] ep 监听的本地端点（地址与端口）
-        /// @param[in] HF 业务处理回调（返回值作为回复内容发回客户端）
-        /// @param[in] timeOut 会话空闲超时时间（秒），默认 60 秒
-        /// @warning    须保证 io 的生命周期长于本服务器
-        Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF, long long timeOut)
-            : Server(io, ep, HF, timeOut, 60)
-        {
-        }
 
         /// @brief      构造函数
         /// @details    服务器的构造，完成 acceptor 的 open / set_option / bind / listen
@@ -188,6 +176,8 @@ namespace Net
             // 初始化检查周期
             this->checkTime = checkTime;
 
+            running = false;
+
             Utils::Out::outMsg("服务器初始化完成");
         }
 
@@ -208,12 +198,12 @@ namespace Net
 
         void Server::start()
         {
-            if (running)
+            // 判断是否已经启动
+            if (running.exchange(true))
             {
                 Utils::Out::outMsg("服务器已经在运行监听了");
                 return;
             }
-            running = true;
 
             // 此处一定安全
             auto self = shared_from_this();
