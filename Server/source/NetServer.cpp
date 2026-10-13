@@ -146,7 +146,8 @@ namespace Net
         /// @note
         bool Session::isClosed()
         {
-            return stop.load() || closing;
+            // 仅在 IO 线程内调用（socket.is_open() 非线程安全）
+            return stop.load() || closing.load() || !socket.is_open();
         }
 
         //===Server===
