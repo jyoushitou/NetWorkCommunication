@@ -334,7 +334,7 @@ namespace Net
 
         try
         {
-            if (recv == nullptr)
+            if (recvNode == nullptr)
             {
                 // 申请接收缓存
                 // 使用共享指针
