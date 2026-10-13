@@ -283,11 +283,6 @@ namespace Net
         boost::asio::post(socket.get_executor(),
                           [this, self]()
                           {
-                              // 已经标记过在关闭状态
-                              if (closing)
-                              {
-                                  return;
-                              }
                               // 标记关闭状态
                               closing = true;
 
@@ -298,16 +293,13 @@ namespace Net
 
                               // 判断是否发送完毕或者在发送状态
                               // 不是：则进入断连阶段
-                              if (!sending && sendQueue.empty())
-                              {
-                                  // 启动关闭函数
-                                  socketClose();
-                              }
-                              // 不在发送状态且有消息，发送消息
-                              else
+                              if (sending && !sendQueue.empty())
                               {
                                   doSend();
+                                  return;
                               }
+                              // 启动关闭函数
+                              socketClose();
                           });
     }
 
