@@ -174,12 +174,23 @@ namespace Net
             // 给智能指针赋值
             this->HF = HF;
 
-            // 初始化超时时间
-            this->timeOut = timeOut;
-            // 初始化检查周期
-            this->checkTime = checkTime;
+            this->timeOut = (timeOut > 0) ? timeOut : 60;
+            this->checkTime = (checkTime > 0) ? checkTime : 60;
+
+            // 判断timeOut、checkTime是否合法
+            if (timeOut <= 0 || checkTime <= 0)
+            {
+                Utils::Out::outErr("timeOut / checkTime 非法，已回退为默认 60 秒");
+            }
+
             // 初始化每个session的最大发送内存
-            this->maxSendBufLen = maxSendBufLen;
+            this->maxSendBufLen = maxSendBufLen ? maxSendBufLen : 1024 * 1024 * 10;
+
+            // 判断maxSendBufLen是否合法
+            if (maxSendBufLen <= 0)
+            {
+                Utils::Out::outErr("maxSendBufLen 非法，已回退为默认1024*1024*10");
+            }
 
             running = false;
 
