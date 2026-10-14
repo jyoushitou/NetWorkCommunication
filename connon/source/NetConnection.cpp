@@ -33,8 +33,12 @@ namespace Net
     /// @note       与 ntohll 互为对称操作
     static uint64_t htonll(uint64_t value)
     {
-        return ((uint64_t)htonl(static_cast<uint32_t>(value & 0xFFFFFFFF)) << 32) |
-               htonl(static_cast<uint32_t>(value >> 32));
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+        return value; // 大端：本机序即网络序
+#else
+        return (static_cast<std::uint64_t>(htonl(static_cast<std::uint32_t>(value & 0xFFFFFFFFu))) << 32) |
+               static_cast<std::uint64_t>(htonl(static_cast<std::uint32_t>(value >> 32)));
+#endif
     }
 
     /// @brief      64位网络字节序转主机字节序
