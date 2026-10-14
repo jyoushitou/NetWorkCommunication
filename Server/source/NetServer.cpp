@@ -310,9 +310,9 @@ namespace Net
                                                   // 回复提醒消息
                                                   it->toSend(0LL, "长时间未发送，关闭连接");
                                               }
-                                              catch (boost::system::error_code ec)
+                                              catch (const std::exception& e)
                                               {
-                                                  Utils::Out::outErr("发送关闭消息出现了错误" + ec.value());
+                                                  Utils::Out::outErr("发送关闭消息出现了错误" + std::string(e.what()));
                                               }
                                               catch (...)
                                               {
