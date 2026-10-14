@@ -35,8 +35,8 @@ namespace Net
         /// @warning    生命周期须长于本客户端
         /// @note
         Client::Client(boost::asio::io_context& io, std::unique_ptr<HandleFunction> HF, HostPort HP,
-                       std::unique_ptr<CloseFunction> CF)
-            : Connection(boost::asio::ip::tcp::socket(io), io), resolver(io)
+                       std::unique_ptr<CloseFunction> CF, int maxSendBufLen)
+            : Connection(boost::asio::ip::tcp::socket(io), io, maxSendBufLen), resolver(io)
         {
             // 注册回调
             this->HF = std::move(HF);
@@ -45,9 +45,6 @@ namespace Net
 
             // 转移所有权到client
             this->CF = std::move(CF);
-
-            // 初始化发送数据量
-            this->queueBufLen = 0;
 
             // 初始状态
             closeNotifiedByUser = false;

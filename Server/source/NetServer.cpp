@@ -26,8 +26,8 @@ namespace Net
         /// @param[in] timeout 超时时间
         /// @note 默认60s超时
         Session::Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                         std::shared_ptr<HandleFunction> HF, long long timeout)
-            : Connection(std::move(sock), io)
+                         std::shared_ptr<HandleFunction> HF, long long timeout, int maxSendBufLen)
+            : Connection(std::move(sock), io, maxSendBufLen)
         {
             // 初始化停止状态置为false
             stop = false;
@@ -158,7 +158,7 @@ namespace Net
         /// @param[in] ep 监听的本地端点（地址与端口）
         /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime)
+                       std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime, int maxSendBufLen)
             : ioc(io), acceptor(io)
         {
             // 打开连接
@@ -176,6 +176,8 @@ namespace Net
             this->timeOut = timeOut;
             // 初始化检查周期
             this->checkTime = checkTime;
+            // 初始化每个session的最大发送内存
+            this->maxSendBufLen = maxSendBufLen;
 
             running = false;
 
@@ -248,7 +250,8 @@ namespace Net
                                       {
                                           // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
                                           // 构造函数按值接收 socket，需 std::move(*sock)
-                                          auto session = std::make_shared<Session>(ioc, std::move(*sock), HF, timeOut);
+                                          auto session = std::make_shared<Session>(ioc, std::move(*sock), HF, timeOut,
+                                                                                   maxSendBufLen);
                                           sessions.push_back(session);
                                           // 启动读（继承自 Connection::start()）
                                           session->start();

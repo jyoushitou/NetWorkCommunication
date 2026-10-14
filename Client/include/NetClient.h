@@ -44,7 +44,7 @@ namespace Net
             /// @warning    生命周期须长于本客户端
             /// @note
             explicit Client(boost::asio::io_context& io, std::unique_ptr<HandleFunction> HF, HostPort HP,
-                            std::unique_ptr<CloseFunction> CF);
+                            std::unique_ptr<CloseFunction> CF, int maxSendBufLen);
 
             /// @brief      连接服务器端
             /// @details    异步解析地址并建立连接，成功后自动调用 start()

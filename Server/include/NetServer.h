@@ -54,9 +54,10 @@ namespace Net
             /// @param[in] sock 连接的socket
             /// @param[in] HF 消息回调函数
             /// @param[in] timeout 超时时间
+            /// @param[in] maxSendBufLen 设置发送队列最大长度
             /// @note 默认60s超时
             Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock, std::shared_ptr<HandleFunction> HF,
-                    long long timeout);
+                    long long timeout, int maxSendBufLen);
 
             /// @brief      回复消息
             /// @details    主线程调用，向该客户端回复一条消息
@@ -135,7 +136,7 @@ namespace Net
             /// @param[in] checkTime 检查会话周期
             /// @warning    须保证 io 的生命周期长于本服务器
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut = 60, long long checkTime = 60);
+                   long long timeOut = 60, long long checkTime = 60, int maxSendBufLen = 1024 * 1024 * 10);
 
             /// @brief      析构函数
             /// @details    停止服务器并回收清理线程，停止服务器并回收清理线程，先stop()再join线程
@@ -210,6 +211,9 @@ namespace Net
             /// @brief 设置会话超时时间
             /// @details
             long long timeOut = 60;
+
+            /// @brief 记录每个session的最大发送内存
+            int maxSendBufLen = 0;
         };
     } // namespace Server
 } // namespace Net
