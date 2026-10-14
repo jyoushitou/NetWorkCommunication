@@ -203,7 +203,7 @@ namespace Net
     /// @details    唯一的构造函数，初始化socket与内部状态
     /// @param[in] socket 连接的socket
     /// @note
-    Connection::Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io)
+    Connection::Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io, int maxSendBufLen)
         : socket(std::move(socket)), ioc(io)
     {
         // 发送状态
@@ -213,9 +213,14 @@ namespace Net
         // 初始化为false
         closing = false;
 
+        // 关闭通知标记
         closeNotified.store(false);
 
+        // socket关闭
         closeSocket.store(false);
+
+        /// 记录消息体数量
+        queueBufLen = 0;
     }
 
     /// @brief      开始函数
@@ -526,6 +531,7 @@ namespace Net
     /// @note
     bool Connection::toSend(unsigned long long msg_id, const std::string& msg)
     {
+        // 判断消息体是否合法
         if (msg.empty())
         {
             throw std::invalid_argument("禁止发送空消息");
@@ -534,6 +540,14 @@ namespace Net
         {
             throw std::invalid_argument("消息体过长，最长为" + std::to_string(MAX_LENGTH) + "字节");
         }
+
+        // 判断发送对列是否有空余
+        if (msg.size() + queueBufLen > maxSendBufLen)
+        {
+            throw std::invalid_argument("当前消息体过长，请稍后重试");
+        }
+
+        queueBufLen += msg.size();
 
         // 加入发送队列
         send(msg_id, msg);

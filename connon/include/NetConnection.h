@@ -183,7 +183,7 @@ namespace Net
         /// @param[in] socket 连接的socket
         /// @param[in] io 保存会话的io_context
         /// @note
-        explicit Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io);
+        explicit Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io, int maxSendBufLen);
 
         /// @brief      发送任务创建
         /// @details    显式指定 msg_id，用于日志追踪
@@ -311,5 +311,11 @@ namespace Net
         /// @brief  socket是否已经被关闭
         /// @details 用于标记是否还有效
         std::atomic<bool> closeSocket = false;
+
+        /// @brief 发送数据的记录
+        int queueBufLen = 0;
+
+        /// @brief 记录发送的最大发送长度
+        int maxSendBufLen = 0;
     };
 } // namespace Net
