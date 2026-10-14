@@ -240,34 +240,49 @@ namespace Net
             auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
 
             // 异步连接
-            acceptor.async_accept(*sock,
-                                  [this, self, sock](boost::system::error_code ec)
-                                  {
-                                      // 服务器已停止：acceptor 被主动关闭导致的取消错误（如 system:995）
-                                      // 是正常退出流程的一部分，不是真正的错误，静默返回即可
-                                      if (!running)
-                                          return;
+            acceptor.async_accept(
+                *sock,
+                [this, self, sock](boost::system::error_code ec)
+                {
+                    // 服务器已停止：acceptor 被主动关闭导致的取消错误（如 system:995）
+                    // 是正常退出流程的一部分，不是真正的错误，静默返回即可
+                    if (!running)
+                        return;
 
-                                      if (!ec)
-                                      {
-                                          // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
-                                          // 构造函数按值接收 socket，需 std::move(*sock)
-                                          auto session = std::make_shared<Session>(ioc, std::move(*sock), HF, timeOut,
-                                                                                   maxSendBufLen);
-                                          sessions.push_back(session);
-                                          // 启动读（继承自 Connection::start()）
-                                          session->start();
+                    if (!ec)
+                    {
+                        // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
+                        // 构造函数按值接收 socket，需 std::move(*sock)
+                        auto session = std::make_shared<Session>(ioc, std::move(*sock), HF, timeOut, maxSendBufLen);
+                        sessions.push_back(session);
+                        // 启动读（继承自 Connection::start()）
+                        session->start();
 
-                                          // 继续接受下一个连接
-                                          StartAccept();
-                                      }
-                                      else
-                                      {
-                                          // 仅在服务器仍在运行时，才输出真正的 accept 错误
-                                          Utils::Out::outErr("accept 错误: " + ec.what());
-                                          StartAccept();
-                                      }
-                                  });
+                        // 继续接受下一个连接
+                        StartAccept();
+                    }
+                    else
+                    {
+                        // 仅在服务器仍在运行时，才输出真正的 accept 错误
+                        Utils::Out::outErr("accept 错误: " + ec.what());
+
+                        if (!running)
+                        {
+                            return;
+                        }
+
+                        // 等待100ms后尝试重新连接
+                        auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(100));
+                        timer->async_wait(
+                            [this, self, timer](const boost::system::error_code&)
+                            {
+                                if (running)
+                                {
+                                    StartAccept();
+                                }
+                            });
+                    }
+                });
         }
 
         /// @brief      清理失效会话
