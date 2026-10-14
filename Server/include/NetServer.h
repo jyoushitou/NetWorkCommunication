@@ -138,7 +138,7 @@ namespace Net
                    long long timeOut = 60, long long checkTime = 60);
 
             /// @brief      析构函数
-            /// @details    先停止服务器并回收清理线程，避免线程析构时未 join 触发 terminate
+            /// @details    停止服务器并回收清理线程，停止服务器并回收清理线程，先stop()再join线程
             /// @note       派生类析构会自动调用基类析构
             virtual ~Server();
 

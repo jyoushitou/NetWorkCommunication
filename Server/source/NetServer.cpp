@@ -183,7 +183,7 @@ namespace Net
         }
 
         /// @brief      析构函数
-        /// @details    停止服务器并回收清理线程，避免 std::thread 对象析构时仍 joinable 触发 std::terminate
+        /// @details    停止服务器并回收清理线程，先stop()再join线程
         /// @note
         Server::~Server()
         {
@@ -204,6 +204,13 @@ namespace Net
             {
                 Utils::Out::outMsg("服务器已经在运行监听了");
                 return;
+            }
+
+            // Stop() 后重启：先回收上一轮的监控线程。
+            // 给 joinable 的 std::thread 赋值会直接 std::terminate()，在这里兜住。
+            if (clearSessionThread.joinable())
+            {
+                clearSessionThread.join();
             }
 
             // 此处一定安全
