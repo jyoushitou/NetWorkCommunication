@@ -138,7 +138,7 @@ namespace Net
         }
         else if (total_len <= 0)
         {
-            throw std::invalid_argument("total_len非法，当前total长度为" + total_len);
+            throw std::invalid_argument("total_len非法，当前total长度为" + std::to_string(total_len));
         }
 
         std::memset(buf, '\0', static_cast<std::size_t>(total_len));
