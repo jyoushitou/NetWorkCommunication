@@ -24,6 +24,8 @@ namespace Net
         /// @details 用于在收到消息后的处理
         using HandleFunction = std::function<void(unsigned long long, std::string)>;
 
+        using CloseFunction = std::function<void()>;
+
         /// @brief      客户端连接类
         /// @details    继承自 Connection，负责连接服务器、收发消息并回调上层业务
         /// @warning    禁止持有裸指针，必须通过 shared_ptr 管理生命周期
@@ -35,9 +37,11 @@ namespace Net
             /// @details    唯一的构造函数
             /// @param[in] io 保存会话的io_context
             /// @param[in] HF 存储回调函数
+            /// @param[in] CF 存储主函数的结束回调
             /// @warning    生命周期须长于本客户端
             /// @note
-            explicit Client(boost::asio::io_context& io, std::unique_ptr<HandleFunction> HF, HostPort HP);
+            explicit Client(boost::asio::io_context& io, std::unique_ptr<HandleFunction> HF, HostPort HP,
+                            std::unique_ptr<CloseFunction> CF);
 
             /// @brief      连接服务器端
             /// @details    异步解析地址并建立连接，成功后自动调用 start()
@@ -73,6 +77,9 @@ namespace Net
             void recvToWork(unsigned long long, std::string) override;
 
         private:
+            /// @brief 主函数的关闭函数
+            void CloseClient();
+
             /// @brief      解析器
             /// @details    用于异步解析服务器地址（必须作为成员，保证异步解析期间对象存活）
             /// @warning    生命周期须长于本客户端
@@ -87,6 +94,9 @@ namespace Net
             /// @brief 记录对应的IP和port
             /// @details 记录这个client对应的host和port
             HostPort HP;
+
+            /// @brief 记录程序的关闭函数
+            std::unique_ptr<CloseFunction> CF;
         };
     } // namespace Client
 } // namespace Net

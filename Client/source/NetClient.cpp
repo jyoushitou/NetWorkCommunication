@@ -34,13 +34,17 @@ namespace Net
         /// @param[in] serviceID 服务ID，用于日志打印
         /// @warning    生命周期须长于本客户端
         /// @note
-        Client::Client(boost::asio::io_context& io, std::unique_ptr<HandleFunction> HF, HostPort HP)
+        Client::Client(boost::asio::io_context& io, std::unique_ptr<HandleFunction> HF, HostPort HP,
+                       std::unique_ptr<CloseFunction> CF)
             : Connection(boost::asio::ip::tcp::socket(io), io), resolver(io)
         {
             // 注册回调
             this->HF = std::move(HF);
             // 注册host和port
             this->HP = HP;
+
+            // 转移所有权到client
+            this->CF = std::move(CF);
         }
 
         /// @brief      连接服务器端
@@ -108,6 +112,15 @@ namespace Net
             if (HF)
             {
                 (*HF)(msg_id, std::move(msg));
+            }
+        }
+
+        /// @brief 主函数的关闭函数
+        void Client::CloseClient()
+        {
+            if (CF)
+            {
+                (*CF)();
             }
         }
 
