@@ -191,7 +191,7 @@ namespace Net
         /// @param[in] msg 消息序列化字符串
         /// @warning    禁止传入空消息或超长消息
         /// @note
-        void toSend(unsigned long long msg_id, const std::string& msg);
+        bool toSend(unsigned long long msg_id, const std::string& msg);
 
         /// @brief      开始函数
         /// @details    启动连接的异步读取流程

@@ -524,7 +524,7 @@ namespace Net
     /// @param[in] msg 消息序列化字符串
     /// @warning    禁止传入空消息或超长消息，就会抛出异常
     /// @note
-    void Connection::toSend(unsigned long long msg_id, const std::string& msg)
+    bool Connection::toSend(unsigned long long msg_id, const std::string& msg)
     {
         if (msg.empty())
         {

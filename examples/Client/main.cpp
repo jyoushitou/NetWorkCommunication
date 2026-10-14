@@ -189,7 +189,7 @@ int main()
 
     Utils::Out::outMsg("收到退出信号，正在关闭所有连接...");
 
-    // 停止所有客户端的收发（幂等，可安全重复调用）
+    // 请求各连接优雅关闭（Stop 内部会 post 关闭请求）
     for (auto& cp : clients)
     {
         if (cp.client)
@@ -198,16 +198,7 @@ int main()
         }
     }
 
-    // 停止 io_context，让 run() 尽快返回
-    for (auto& io : g_ios)
-    {
-        if (io)
-        {
-            io->stop();
-        }
-    }
-
-    // 回收 IO 线程
+    // 不调用 io->stop()：等所有异步操作结束后 run() 会自然返回
     for (auto& cp : clients)
     {
         if (cp.iot.joinable())
@@ -216,7 +207,7 @@ int main()
         }
     }
 
-    // 释放连接：先销毁 client，再销毁 io_context
+    // 此时 handler 队列已空，再销毁 client 与 io_context 才是安全的
     clients.clear();
     g_ios.clear();
 
