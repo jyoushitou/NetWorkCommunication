@@ -376,6 +376,10 @@ namespace Net
         catch (...)
         {
             Utils::Out::outErr("未知错误");
+
+            // 申请失败，则关闭连接
+            errToClose();
+
             return;
         }
 
@@ -472,6 +476,10 @@ namespace Net
         catch (...)
         {
             Utils::Out::outErr("未知错误");
+
+            // 申请失败，则关闭连接
+            errToClose();
+
             return;
         }
 
