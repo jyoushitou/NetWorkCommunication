@@ -26,8 +26,8 @@ namespace Net
         /// @param[in] timeout 超时时间
         /// @note 默认60s超时
         Session::Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                         std::shared_ptr<HandleFunction> HF, long long timeout)
-            : Connection(std::move(sock), io)
+                         std::shared_ptr<HandleFunction> HF, long long timeout, int maxSendBufLen)
+            : Connection(std::move(sock), io, maxSendBufLen)
         {
             // 初始化停止状态置为false
             stop = false;
@@ -56,9 +56,11 @@ namespace Net
 
             if (self == nullptr)
             {
+                Utils::Out::outErr("会话自身强引用获取失败（对象非 shared_ptr 持有），丢弃本条消息");
+                return;
             }
 
-            if (msg == "EXIT")
+            if (msg.c_str() == kCloseCommand)
             {
                 // 收到退出信号
                 // 关闭这次会话，最后析构交给Server的监控线程
@@ -105,7 +107,7 @@ namespace Net
             Utils::Out::outMsg("正在发送回复数据");
 
             // 发送数据
-            toSend(msg_id, std::move(msg));
+            toSend(msg_id, msg);
         }
 
         /// @brief      关闭函数
@@ -146,7 +148,8 @@ namespace Net
         /// @note
         bool Session::isClosed()
         {
-            return stop.load() || closing;
+            // 仅在 IO 线程内调用（socket.is_open() 非线程安全）
+            return stop.load() || closing.load() || !socket.is_open();
         }
 
         //===Server===
@@ -157,7 +160,7 @@ namespace Net
         /// @param[in] ep 监听的本地端点（地址与端口）
         /// @warning    须保证 io 的生命周期长于本服务器
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime)
+                       std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime, int maxSendBufLen)
             : ioc(io), acceptor(io)
         {
             // 打开连接
@@ -171,10 +174,23 @@ namespace Net
             // 给智能指针赋值
             this->HF = HF;
 
-            // 初始化超时时间
-            this->timeOut = timeOut;
-            // 初始化检查周期
-            this->checkTime = checkTime;
+            this->timeOut = (timeOut > 0) ? timeOut : 60;
+            this->checkTime = (checkTime > 0) ? checkTime : 60;
+
+            // 判断timeOut、checkTime是否合法
+            if (timeOut <= 0 || checkTime <= 0)
+            {
+                Utils::Out::outErr("timeOut / checkTime 非法，已回退为默认 60 秒");
+            }
+
+            // 初始化每个session的最大发送内存
+            this->maxSendBufLen = maxSendBufLen ? maxSendBufLen : 1024 * 1024 * 10;
+
+            // 判断maxSendBufLen是否合法
+            if (maxSendBufLen <= 0)
+            {
+                Utils::Out::outErr("maxSendBufLen 非法，已回退为默认1024*1024*10");
+            }
 
             running = false;
 
@@ -182,7 +198,7 @@ namespace Net
         }
 
         /// @brief      析构函数
-        /// @details    停止服务器并回收清理线程，避免 std::thread 对象析构时仍 joinable 触发 std::terminate
+        /// @details    停止服务器并回收清理线程，先stop()再join线程
         /// @note
         Server::~Server()
         {
@@ -203,6 +219,13 @@ namespace Net
             {
                 Utils::Out::outMsg("服务器已经在运行监听了");
                 return;
+            }
+
+            // Stop() 后重启：先回收上一轮的监控线程。
+            // 给 joinable 的 std::thread 赋值会直接 std::terminate()，在这里兜住。
+            if (clearSessionThread.joinable())
+            {
+                clearSessionThread.join();
             }
 
             // 此处一定安全
@@ -228,33 +251,49 @@ namespace Net
             auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
 
             // 异步连接
-            acceptor.async_accept(*sock,
-                                  [this, self, sock](boost::system::error_code ec)
-                                  {
-                                      // 服务器已停止：acceptor 被主动关闭导致的取消错误（如 system:995）
-                                      // 是正常退出流程的一部分，不是真正的错误，静默返回即可
-                                      if (!running)
-                                          return;
+            acceptor.async_accept(
+                *sock,
+                [this, self, sock](boost::system::error_code ec)
+                {
+                    // 服务器已停止：acceptor 被主动关闭导致的取消错误（如 system:995）
+                    // 是正常退出流程的一部分，不是真正的错误，静默返回即可
+                    if (!running)
+                        return;
 
-                                      if (!ec)
-                                      {
-                                          // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
-                                          // 构造函数按值接收 socket，需 std::move(*sock)
-                                          auto session = std::make_shared<Session>(ioc, std::move(*sock), HF, timeOut);
-                                          sessions.push_back(session);
-                                          // 启动读（继承自 Connection::start()）
-                                          session->start();
+                    if (!ec)
+                    {
+                        // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
+                        // 构造函数按值接收 socket，需 std::move(*sock)
+                        auto session = std::make_shared<Session>(ioc, std::move(*sock), HF, timeOut, maxSendBufLen);
+                        sessions.push_back(session);
+                        // 启动读（继承自 Connection::start()）
+                        session->start();
 
-                                          // 继续接受下一个连接
-                                          StartAccept();
-                                      }
-                                      else
-                                      {
-                                          // 仅在服务器仍在运行时，才输出真正的 accept 错误
-                                          Utils::Out::outErr("accept 错误: " + ec.what());
-                                          StartAccept();
-                                      }
-                                  });
+                        // 继续接受下一个连接
+                        StartAccept();
+                    }
+                    else
+                    {
+                        // 仅在服务器仍在运行时，才输出真正的 accept 错误
+                        Utils::Out::outErr("accept 错误: " + ec.what());
+
+                        if (!running)
+                        {
+                            return;
+                        }
+
+                        // 等待100ms后尝试重新连接
+                        auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(100));
+                        timer->async_wait(
+                            [this, self, timer](const boost::system::error_code&)
+                            {
+                                if (running)
+                                {
+                                    StartAccept();
+                                }
+                            });
+                    }
+                });
         }
 
         /// @brief      清理失效会话
@@ -302,9 +341,9 @@ namespace Net
                                                   // 回复提醒消息
                                                   it->toSend(0LL, "长时间未发送，关闭连接");
                                               }
-                                              catch (boost::system::error_code ec)
+                                              catch (const std::exception& e)
                                               {
-                                                  Utils::Out::outErr("发送关闭消息出现了错误" + ec.value());
+                                                  Utils::Out::outErr("发送关闭消息出现了错误" + std::string(e.what()));
                                               }
                                               catch (...)
                                               {
@@ -348,6 +387,12 @@ namespace Net
 
             // 保活，不保存引用
             auto self = selfWeak.lock();
+
+            if (self == nullptr)
+            {
+                return;
+            }
+
             // 跨线程输入
             boost::asio::post(ioc,
                               [this, self]()

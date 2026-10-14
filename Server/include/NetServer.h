@@ -33,6 +33,10 @@ namespace Net
     /// @note
     namespace Server
     {
+        ///@brief 退出关键字
+        ///@details 退出关键字，未设置时为EXIT
+        inline constexpr const char* kCloseCommand = "EXIT";
+
         /// @brief 连接会话前向声明
         class Session;
 
@@ -54,9 +58,10 @@ namespace Net
             /// @param[in] sock 连接的socket
             /// @param[in] HF 消息回调函数
             /// @param[in] timeout 超时时间
+            /// @param[in] maxSendBufLen 设置发送队列最大长度
             /// @note 默认60s超时
             Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock, std::shared_ptr<HandleFunction> HF,
-                    long long timeout);
+                    long long timeout, int maxSendBufLen);
 
             /// @brief      回复消息
             /// @details    主线程调用，向该客户端回复一条消息
@@ -64,13 +69,6 @@ namespace Net
             /// @param[in] msg 消息序列化字符串
             /// @warning    禁止在回调或事件循环中长时间阻塞
             void reply(unsigned long long msg_id, const std::string& msg);
-
-            /// @brief      业务处理
-            /// @details    收到消息后的具体业务实现，由基类回调触发
-            /// @param[in] msg_id 消息全局唯一ID
-            /// @param[in] msg 消息序列化字符串
-            /// @warning    禁止在回调内部长时间阻塞，会阻塞asio事件循环
-            void recvToWork(const unsigned long long msg_id, std::string msg) override;
 
             /// @brief      关闭函数
             /// @details    用于关闭session连接
@@ -88,6 +86,13 @@ namespace Net
             bool timeOut();
 
         protected:
+            /// @brief      业务处理
+            /// @details    收到消息后的具体业务实现，由基类回调触发
+            /// @param[in] msg_id 消息全局唯一ID
+            /// @param[in] msg 消息序列化字符串
+            /// @warning    禁止在回调内部长时间阻塞，会阻塞asio事件循环
+            void recvToWork(const unsigned long long msg_id, std::string msg) override;
+
             /// @brief      更新连接时间
             /// @details    用于更新时间，超时自动关闭连接，避免占线
             /// @note       在操作后记得调用此函数刷新时间
@@ -135,10 +140,10 @@ namespace Net
             /// @param[in] checkTime 检查会话周期
             /// @warning    须保证 io 的生命周期长于本服务器
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut = 60, long long checkTime = 60);
+                   long long timeOut = 60, long long checkTime = 60, int maxSendBufLen = 1024 * 1024 * 10);
 
             /// @brief      析构函数
-            /// @details    先停止服务器并回收清理线程，避免线程析构时未 join 触发 terminate
+            /// @details    停止服务器并回收清理线程，停止服务器并回收清理线程，先stop()再join线程
             /// @note       派生类析构会自动调用基类析构
             virtual ~Server();
 
@@ -210,6 +215,9 @@ namespace Net
             /// @brief 设置会话超时时间
             /// @details
             long long timeOut = 60;
+
+            /// @brief 记录每个session的最大发送内存
+            int maxSendBufLen = 0;
         };
     } // namespace Server
 } // namespace Net

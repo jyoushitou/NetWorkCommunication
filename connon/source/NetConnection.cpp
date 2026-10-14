@@ -13,8 +13,6 @@
 
 #include "Message.h"
 
-extern int Service_ID;
-
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -33,8 +31,12 @@ namespace Net
     /// @note       与 ntohll 互为对称操作
     static uint64_t htonll(uint64_t value)
     {
-        return ((uint64_t)htonl(static_cast<uint32_t>(value & 0xFFFFFFFF)) << 32) |
-               htonl(static_cast<uint32_t>(value >> 32));
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+        return value; // 大端：本机序即网络序
+#else
+        return (static_cast<std::uint64_t>(htonl(static_cast<std::uint32_t>(value & 0xFFFFFFFFu))) << 32) |
+               static_cast<std::uint64_t>(htonl(static_cast<std::uint32_t>(value >> 32)));
+#endif
     }
 
     /// @brief      64位网络字节序转主机字节序
@@ -138,7 +140,7 @@ namespace Net
         }
         else if (total_len <= 0)
         {
-            throw std::invalid_argument("total_len非法，当前total长度为" + total_len);
+            throw std::invalid_argument("total_len非法，当前total长度为" + std::to_string(total_len));
         }
 
         std::memset(buf, '\0', static_cast<std::size_t>(total_len));
@@ -162,6 +164,8 @@ namespace Net
         {
             // 删除之前的缓存区大小
             delete[] buf;
+            // 赋值避免指向野指针
+            buf = nullptr;
         }
 
         // 设置新的缓冲区大小
@@ -203,7 +207,7 @@ namespace Net
     /// @details    唯一的构造函数，初始化socket与内部状态
     /// @param[in] socket 连接的socket
     /// @note
-    Connection::Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io)
+    Connection::Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io, int maxSendBufLen)
         : socket(std::move(socket)), ioc(io)
     {
         // 发送状态
@@ -213,9 +217,14 @@ namespace Net
         // 初始化为false
         closing = false;
 
+        // 关闭通知标记
         closeNotified.store(false);
 
+        // socket关闭
         closeSocket.store(false);
+
+        /// 记录消息体数量
+        queueBufLen = 0;
     }
 
     /// @brief      开始函数
@@ -235,7 +244,7 @@ namespace Net
     void Connection::socketClose()
     {
         // 检查socket状态
-        if (!closeSocket.exchange(true))
+        if (closeSocket.exchange(true))
         {
             return;
         }
@@ -261,46 +270,66 @@ namespace Net
     /// @warning 调用后连接不可用，会发送通知消息
     void Connection::stopToClose()
     {
-        if (closing)
-        {
-            return;
-        }
-
-        connectionClose();
+        // 是否"已经关过"由 IO 线程内的 closing.exchange 判定，
+        // 这里不再做跨线程的 test-then-act，重复调用完全安全（幂等）。
+        auto self = shared_from_this();
+        // io线程发送connectionClose()函数
+        boost::asio::post(socket.get_executor(), [this, self]() { connectionClose(); });
     }
 
     /// @brief      connection连接的正常关闭连接
-    /// @details    向 IO 线程投递关闭请求，API 允许外部线程调用
+    /// @details    关闭请求
     /// @warning    异步执行，调用后连接不再可用
     /// @note
     void Connection::connectionClose()
     {
+        // 只允许第一次调用推进关闭流程
+        if (closing.exchange(true))
+        {
+            return;
+        }
+
         Utils::Out::outMsg("正在关闭Session");
 
-        // 保活
-        auto self = shared_from_this();
+        if (sending)
+        {
+            // 有写操作在飞：等它的完成回调调用 continueClose() 续接
+            return;
+        }
 
-        boost::asio::post(socket.get_executor(),
-                          [this, self]()
-                          {
-                              // 标记关闭状态
-                              closing = true;
+        if (!sendQueue.empty())
+        {
+            // 优雅关闭：先把队列里的消息发完，doSend() 完成后会走 continueClose()
+            doSend();
+            return;
+        }
 
-                              if (sending)
-                              {
-                                  return;
-                              }
+        socketClose();
+    }
 
-                              // 判断是否发送完毕或者在发送状态
-                              // 不是：则进入断连阶段
-                              if (sending && !sendQueue.empty())
-                              {
-                                  doSend();
-                                  return;
-                              }
-                              // 启动关闭函数
-                              socketClose();
-                          });
+    /// @brief 续接关闭流程（只由写完成回调调用：此时不再做 closing 早退判断）
+    /// @details
+    void Connection::continueClose()
+    {
+        // 只由写完成回调调用；未进入关闭流程时什么都不做
+        if (!closing.load())
+        {
+            return;
+        }
+
+        if (sending)
+        {
+            // 还有写操作在飞（doSend 已续上，等下一次完成回调）
+            return;
+        }
+
+        if (!sendQueue.empty())
+        {
+            doSend();
+            return;
+        }
+
+        socketClose();
     }
 
     /// @brief 出错时调用此函数
@@ -308,8 +337,15 @@ namespace Net
     /// @warning 调用后连接不可用，且不会发送通知消息
     void Connection::errToClose()
     {
+        if (closeSocket.load())
+        {
+            return; // 已经关过，避免重复清理
+        }
+
         // 清理所有的发送队列
         sendQueue.clear();
+        // 置closing为true
+        closing = true;
 
         // 调用socket直接关闭
         socketClose();
@@ -342,6 +378,10 @@ namespace Net
         catch (...)
         {
             Utils::Out::outErr("未知错误");
+
+            // 申请失败，则关闭连接
+            errToClose();
+
             return;
         }
 
@@ -379,6 +419,8 @@ namespace Net
                                         Utils::Out::outErr("收到的消息的长度错误，请通知客户端修复后重试");
 
                                         errToClose();
+
+                                        return;
                                     }
 
                                     Utils::Out::outMsg("解析完成！ID：" + std::to_string(msg_id) + "，长度：" +
@@ -436,6 +478,10 @@ namespace Net
         catch (...)
         {
             Utils::Out::outErr("未知错误");
+
+            // 申请失败，则关闭连接
+            errToClose();
+
             return;
         }
 
@@ -495,8 +541,9 @@ namespace Net
     /// @param[in] msg 消息序列化字符串
     /// @warning    禁止传入空消息或超长消息，就会抛出异常
     /// @note
-    void Connection::toSend(unsigned long long msg_id, const std::string& msg)
+    bool Connection::toSend(unsigned long long msg_id, const std::string& msg)
     {
+        // 判断消息体是否合法
         if (msg.empty())
         {
             throw std::invalid_argument("禁止发送空消息");
@@ -505,6 +552,14 @@ namespace Net
         {
             throw std::invalid_argument("消息体过长，最长为" + std::to_string(MAX_LENGTH) + "字节");
         }
+
+        // 判断发送对列是否有空余
+        if (msg.size() + queueBufLen > maxSendBufLen)
+        {
+            throw std::invalid_argument("当前消息体过长，请稍后重试");
+        }
+
+        queueBufLen += msg.size();
 
         // 加入发送队列
         send(msg_id, msg);
@@ -634,6 +689,7 @@ namespace Net
                                      // 才允许弹出，避免 deque empty 的 Debug 断言。
                                      if (!sendQueue.empty() && sendQueue.front() == send_node)
                                      {
+                                         queueBufLen -= send_node->getCurLen();
                                          sendQueue.pop_front();
                                      }
 
@@ -652,7 +708,7 @@ namespace Net
                                          if (closing)
                                          {
                                              // 关闭连接
-                                             stopToClose();
+                                             continueClose();
                                          }
                                      }
                                  });

@@ -10,8 +10,6 @@
 
 #include <boost/asio.hpp>
 
-#include "Utils.h"
-
 namespace Net
 {
     /// @brief      消息ID长度
@@ -183,7 +181,7 @@ namespace Net
         /// @param[in] socket 连接的socket
         /// @param[in] io 保存会话的io_context
         /// @note
-        explicit Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io);
+        explicit Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io, int maxSendBufLen);
 
         /// @brief      发送任务创建
         /// @details    显式指定 msg_id，用于日志追踪
@@ -191,7 +189,7 @@ namespace Net
         /// @param[in] msg 消息序列化字符串
         /// @warning    禁止传入空消息或超长消息
         /// @note
-        void toSend(unsigned long long msg_id, const std::string& msg);
+        bool toSend(unsigned long long msg_id, const std::string& msg);
 
         /// @brief      开始函数
         /// @details    启动连接的异步读取流程
@@ -202,7 +200,7 @@ namespace Net
         /// @brief      析构函数
         /// @details    采用默认析构
         /// @note
-        ~Connection() = default;
+        virtual ~Connection() = default;
 
     protected:
         /// @brief 更新时间
@@ -258,11 +256,15 @@ namespace Net
         boost::asio::io_context& ioc;
 
     private:
-        /// @brief      connection连接的正常关闭连接
+        /// @brief 推进关闭流程（IO 线程内执行，幂等；重复调用只有第一次生效）
         /// @details    向 IO 线程投递关闭请求，允许外部线程调用
         /// @warning    异步执行，调用后连接不再可用
         /// @note
         void connectionClose();
+
+        /// @brief 续接关闭流程（只由写完成回调调用：此时不再做 closing 早退判断）
+        /// @details
+        void continueClose();
 
         /// @brief      只关闭socket
         /// @details    关闭socket，并调用最后的虚函数
@@ -307,5 +309,11 @@ namespace Net
         /// @brief  socket是否已经被关闭
         /// @details 用于标记是否还有效
         std::atomic<bool> closeSocket = false;
+
+        /// @brief 发送数据的记录
+        int queueBufLen = 0;
+
+        /// @brief 记录发送的最大发送长度
+        int maxSendBufLen = 0;
     };
 } // namespace Net
