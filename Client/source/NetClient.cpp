@@ -46,6 +46,9 @@ namespace Net
             // 转移所有权到client
             this->CF = std::move(CF);
 
+            // 初始化发送数据量
+            this->queueBufLen = 0;
+
             // 初始状态
             closeNotifiedByUser = false;
         }

@@ -12,6 +12,7 @@ namespace Net
 {
     namespace Client
     {
+
         /// @brief 存储ip和端口
         /// @note host:ip地址，port:端口
         struct HostPort
@@ -102,6 +103,9 @@ namespace Net
 
             /// @brief 记录是否已经通知过
             std::atomic<bool> closeNotifiedByUser = flase;
+
+            /// @brief 记录消息体数量
+            int queueBufLen = 0;
         };
     } // namespace Client
 } // namespace Net
