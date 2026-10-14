@@ -162,6 +162,8 @@ namespace Net
         {
             // 删除之前的缓存区大小
             delete[] buf;
+            // 赋值避免指向野指针
+            buf = nullptr;
         }
 
         // 设置新的缓冲区大小
