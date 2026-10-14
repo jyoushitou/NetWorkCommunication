@@ -70,13 +70,6 @@ namespace Net
             /// @warning    禁止在回调或事件循环中长时间阻塞
             void reply(unsigned long long msg_id, const std::string& msg);
 
-            /// @brief      业务处理
-            /// @details    收到消息后的具体业务实现，由基类回调触发
-            /// @param[in] msg_id 消息全局唯一ID
-            /// @param[in] msg 消息序列化字符串
-            /// @warning    禁止在回调内部长时间阻塞，会阻塞asio事件循环
-            void recvToWork(const unsigned long long msg_id, std::string msg) override;
-
             /// @brief      关闭函数
             /// @details    用于关闭session连接
             void closeSession();
@@ -93,6 +86,13 @@ namespace Net
             bool timeOut();
 
         protected:
+            /// @brief      业务处理
+            /// @details    收到消息后的具体业务实现，由基类回调触发
+            /// @param[in] msg_id 消息全局唯一ID
+            /// @param[in] msg 消息序列化字符串
+            /// @warning    禁止在回调内部长时间阻塞，会阻塞asio事件循环
+            void recvToWork(const unsigned long long msg_id, std::string msg) override;
+
             /// @brief      更新连接时间
             /// @details    用于更新时间，超时自动关闭连接，避免占线
             /// @note       在操作后记得调用此函数刷新时间

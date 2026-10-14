@@ -6,7 +6,6 @@
 #include <functional>
 
 #include "NetConnection.h"
-#include "Utils.h"
 
 namespace Net
 {

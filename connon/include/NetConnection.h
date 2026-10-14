@@ -10,8 +10,6 @@
 
 #include <boost/asio.hpp>
 
-#include "Utils.h"
-
 namespace Net
 {
     /// @brief      消息ID长度
@@ -202,7 +200,7 @@ namespace Net
         /// @brief      析构函数
         /// @details    采用默认析构
         /// @note
-        ~Connection() = default;
+        virtual ~Connection() = default;
 
     protected:
         /// @brief 更新时间
