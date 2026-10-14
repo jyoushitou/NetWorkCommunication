@@ -24,6 +24,8 @@ namespace Net
         /// @details 用于在收到消息后的处理
         using HandleFunction = std::function<void(unsigned long long, std::string)>;
 
+        /// @brief 业务关闭回调类型
+        /// @details 用于在出现错误时的处理业务侧问题
         using CloseFunction = std::function<void()>;
 
         /// @brief      客户端连接类
@@ -97,6 +99,9 @@ namespace Net
 
             /// @brief 记录程序的关闭函数
             std::unique_ptr<CloseFunction> CF;
+
+            /// @brief 记录是否已经通知过
+            std::atomic<bool> closeNotifiedByUser = flase;
         };
     } // namespace Client
 } // namespace Net

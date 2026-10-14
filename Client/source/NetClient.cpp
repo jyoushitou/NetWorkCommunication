@@ -45,6 +45,9 @@ namespace Net
 
             // 转移所有权到client
             this->CF = std::move(CF);
+
+            // 初始状态
+            closeNotifiedByUser = false;
         }
 
         /// @brief      连接服务器端
@@ -89,6 +92,13 @@ namespace Net
                             if (ec_conect)
                             {
                                 Utils::Out::outErr("连接失败: " + ec_conect.what());
+
+                                // 通知业务侧关闭
+                                CloseClient();
+
+                                // 关闭连接
+                                errToClose();
+
                                 return;
                             }
 
@@ -118,7 +128,7 @@ namespace Net
         /// @brief 主函数的关闭函数
         void Client::CloseClient()
         {
-            if (CF)
+            if (CF && *CF && !closeNotifiedByUser.exchange(true))
             {
                 (*CF)();
             }
