@@ -677,6 +677,7 @@ namespace Net
                                      // 才允许弹出，避免 deque empty 的 Debug 断言。
                                      if (!sendQueue.empty() && sendQueue.front() == send_node)
                                      {
+                                         queueBufLen -= send_node->getCurLen();
                                          sendQueue.pop_front();
                                      }
 
