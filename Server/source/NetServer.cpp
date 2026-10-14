@@ -56,6 +56,8 @@ namespace Net
 
             if (self == nullptr)
             {
+                Utils::Out::outErr("会话自身强引用获取失败（对象非 shared_ptr 持有），丢弃本条消息");
+                return;
             }
 
             if (msg == "EXIT")
