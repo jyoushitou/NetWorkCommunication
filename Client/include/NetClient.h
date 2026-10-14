@@ -80,7 +80,7 @@ namespace Net
 
         private:
             /// @brief 主函数的关闭函数
-            void CloseClient();
+            void talkErrorToWork(const boost::system::error_code& ec);
 
             /// @brief      解析器
             /// @details    用于异步解析服务器地址（必须作为成员，保证异步解析期间对象存活）

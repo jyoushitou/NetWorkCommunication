@@ -65,50 +65,55 @@ namespace Net
             /// @details    使用成员resolver（必须作为成员，保证异步解析期间resolver对象存活）
             /// @warning    解析期间须保证本对象存活
             /// @note
-            resolver.async_resolve(
-                HP.host, HP.port,
-                [this, self](const boost::system::error_code& ec,
-                             boost::asio::ip::tcp::resolver::results_type endpoints)
-                {
-                    // 解析失败处理
-                    if (ec)
-                    {
-                        Utils::Out::outErr("解析地址失败: " + ec.what());
-                        // 通知主线程退出，防止 WaitForMessage 永久阻塞
-                        return;
-                    }
+            resolver.async_resolve(HP.host, HP.port,
+                                   [this, self](const boost::system::error_code& ec,
+                                                boost::asio::ip::tcp::resolver::results_type endpoints)
+                                   {
+                                       // 解析失败处理
+                                       if (ec)
+                                       {
+                                           Utils::Out::outErr("解析地址失败: " + ec.what());
+                                           // 通知主线程退出，防止 WaitForMessage 永久阻塞
 
-                    /// @brief      异步连接
-                    /// @details    使用解析得到的端点建立 TCP 连接
-                    /// @warning    连接期间须保证本对象存活
-                    /// @note
-                    boost::asio::async_connect(
-                        socket, endpoints,
-                        [this, self](const boost::system::error_code& ec_conect, const boost::asio::ip::tcp::endpoint&)
-                        {
-                            /// @brief      连接失败处理
-                            /// @details    打印错误并关闭连接
-                            /// @note
-                            if (ec_conect)
-                            {
-                                Utils::Out::outErr("连接失败: " + ec_conect.what());
+                                           // 通知业务侧关闭
+                                           talkErrorToWork(ec);
 
-                                // 通知业务侧关闭
-                                CloseClient();
+                                           // 关闭连接
+                                           errToClose();
+                                           return;
+                                       }
 
-                                // 关闭连接
-                                errToClose();
+                                       /// @brief      异步连接
+                                       /// @details    使用解析得到的端点建立 TCP 连接
+                                       /// @warning    连接期间须保证本对象存活
+                                       /// @note
+                                       boost::asio::async_connect(socket, endpoints,
+                                                                  [this, self](const boost::system::error_code& ec,
+                                                                               const boost::asio::ip::tcp::endpoint&)
+                                                                  {
+                                                                      /// @brief      连接失败处理
+                                                                      /// @details    打印错误并关闭连接
+                                                                      /// @note
+                                                                      if (ec)
+                                                                      {
+                                                                          Utils::Out::outErr("连接失败: " + ec.what());
 
-                                return;
-                            }
+                                                                          // 通知业务侧关闭
+                                                                          talkErrorToWork(ec);
 
-                            /// @brief      连接成功后启动
-                            /// @details    打印日志并启动连接的异步读取流程
-                            /// @note
-                            Utils::Out::outMsg(this->HP.host + "连接成功");
-                            start();
-                        });
-                });
+                                                                          // 关闭连接
+                                                                          errToClose();
+
+                                                                          return;
+                                                                      }
+
+                                                                      /// @brief      连接成功后启动
+                                                                      /// @details    打印日志并启动连接的异步读取流程
+                                                                      /// @note
+                                                                      Utils::Out::outMsg(this->HP.host + "连接成功");
+                                                                      start();
+                                                                  });
+                                   });
         }
 
         /// @brief 后期转到具体业务
@@ -126,7 +131,7 @@ namespace Net
         }
 
         /// @brief 主函数的关闭函数
-        void Client::CloseClient()
+        void Client::talkErrorToWork(const boost::system::error_code& ec)
         {
             if (CF && *CF && !closeNotifiedByUser.exchange(true))
             {
