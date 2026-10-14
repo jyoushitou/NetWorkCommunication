@@ -33,6 +33,10 @@ namespace Net
     /// @note
     namespace Server
     {
+        ///@brief 退出关键字
+        ///@details 退出关键字，未设置时为EXIT
+        inline constexpr const char* kCloseCommand = "EXIT";
+
         /// @brief 连接会话前向声明
         class Session;
 
