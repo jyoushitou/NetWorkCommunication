@@ -107,7 +107,7 @@ namespace Net
             Utils::Out::outMsg("正在发送回复数据");
 
             // 发送数据
-            toSend(msg_id, std::move(msg));
+            toSend(msg_id, msg);
         }
 
         /// @brief      关闭函数
