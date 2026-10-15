@@ -106,7 +106,7 @@ namespace Net
             std::unique_ptr<CloseFunction> CF;
 
             /// @brief 记录是否已经通知过
-            std::atomic<bool> closeNotifiedByUser = flase;
+            std::atomic<bool> closeNotifiedByUser = false;
         };
     } // namespace Client
 } // namespace Net
