@@ -199,6 +199,10 @@ namespace Net
         /// @note
         virtual void start();
 
+        /// @brief 设置NoDelay开启与否
+        /// @details 使用必须在start之前，用于关闭NoDelay
+        void offNoDelay();
+
     protected:
         /// @brief      析构函数
         /// @details    采用默认析构

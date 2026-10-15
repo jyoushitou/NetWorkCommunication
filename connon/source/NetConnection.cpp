@@ -232,6 +232,20 @@ namespace Net
         this->maxSendBufLen = maxSendBufLen;
     }
 
+    /// @brief 设置NoDelay开启与否
+    /// @details 使用必须在start之前，用于关闭NoDelay
+    void Connection::offNoDelay()
+    {
+        // 关闭的核心语句
+        boost::system::error_code ec;
+        socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
+
+        if (ec)
+        {
+            Utils::Out::outErr("关闭NoDelay时出现错误（只影响性能，不会对于消息传递有影响）：" + ec.what());
+        }
+    }
+
     /// @brief      开始函数
     /// @details    启动连接的异步读取流程
     /// @warning    须在socket连接建立后调用
