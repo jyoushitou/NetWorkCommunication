@@ -52,7 +52,7 @@ namespace Net
     }
 
     /// @brief      构造函数（只有长度）
-    /// @details    仅指定缓存长度，消息ID默认为无效值
+    /// @details    委托到 MsgNode(msg_id, max_len)，消息ID传 -1ULL 表示无效值
     /// @param[in] max_len 缓存的最大长度
     /// @note
     MsgNode::MsgNode(int max_len) : MsgNode(-1ULL, max_len)
@@ -63,7 +63,7 @@ namespace Net
     /// @details    指定消息ID与缓存长度，并按长度申请缓冲区
     /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] max_len 缓存的最大长度
-    /// @warning    禁止传非正数，否则缓冲区申请失败
+    /// @warning    禁止传非正数，否则抛出 std::invalid_argument
     /// @note
     MsgNode::MsgNode(unsigned long long msg_id, int max_len)
     {
@@ -131,7 +131,8 @@ namespace Net
     }
 
     /// @brief      清空缓存
-    /// @details    将缓存内容置零并复位读取位置
+    /// @details    将缓存内容整块置零并复位读取位置
+    /// @warning    缓冲区为空指针或长度非法时抛出 std::invalid_argument
     /// @note
     void MsgNode::clear()
     {
@@ -151,12 +152,14 @@ namespace Net
         cur_len = 0;
     }
 
-    /// @brief 重新分配缓存区大小
-    /// @param len
-    /// @return
+    /// @brief      重新分配缓存区大小
+    /// @details    释放旧缓冲区，按 len 重新申请 total_len + 1 字节并把末位置 '\0'，最后调用 clear() 清零
+    /// @param[in] len 新的缓存区长度（字节）
+    /// @warning    禁止传非正数，否则抛出 std::invalid_argument
+    /// @note       构造函数内部会调用；也可用于复用同一个缓存对象
     void MsgNode::clear(int len)
     {
-        // 防御性检查：max_len 必须为正数
+        // 防御性检查：len 必须为正数
         if (len <= 0)
         {
             throw std::invalid_argument("MsgNode: max_len 必须大于 0 ,当前total_len值为" + std::to_string(total_len));
@@ -206,8 +209,11 @@ namespace Net
     }
 
     /// @brief      构造函数
-    /// @details    唯一的构造函数，初始化socket与内部状态
-    /// @param[in] socket 连接的socket
+    /// @details    唯一的构造函数，接管 socket 并初始化发送/关闭相关的内部状态
+    /// @param[in] socket 连接的socket（按值传入，内部 move）
+    /// @param[in] io 保存会话的io_context
+    /// @param[in] maxSendBufLen 发送队列允许积压的最大字节数
+    /// @warning    io 的生命周期必须长于本连接
     /// @note
     Connection::Connection(boost::asio::ip::tcp::socket socket, boost::asio::io_context& io, int maxSendBufLen)
         : socket(std::move(socket)), ioc(io)
@@ -222,21 +228,24 @@ namespace Net
         // 关闭通知标记
         closeNotified.store(false);
 
-        // socket关闭
+        // socket关闭标志
         closeSocket.store(false);
 
-        /// 记录消息体数量
+        // 发送队列积压字节数清零
         queueBufLen = 0;
 
-        // 初始化最大的内存大小
+        // 初始化发送队列允许积压的最大字节数
         this->maxSendBufLen = maxSendBufLen;
     }
 
-    /// @brief 设置NoDelay开启与否
-    /// @details 使用必须在start之前，用于关闭NoDelay
+    /// @brief      开启 TCP_NODELAY
+    /// @details    把 socket 的 no_delay 选项置为 true（禁用 Nagle 算法，小包立即发送）；
+    ///             设置失败只打印错误日志，不影响正常收发
+    /// @warning    须在 start() 之前调用
+    /// @note       函数名沿用历史命名（off + NoDelay），实际效果是「开启 NoDelay」
     void Connection::offNoDelay()
     {
-        // 关闭的核心语句
+        // 开启 TCP_NODELAY（禁用 Nagle 算法，小包立即发送）
         boost::system::error_code ec;
         socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
 
@@ -247,9 +256,9 @@ namespace Net
     }
 
     /// @brief      开始函数
-    /// @details    启动连接的异步读取流程
+    /// @details    启动连接的异步读取流程（readHead）
     /// @warning    须在socket连接建立后调用
-    /// @note
+    /// @note       幂等：重复调用只有第一次生效（由 started 标志判定）
     void Connection::start()
     {
         if (started.exchange(true))
@@ -260,10 +269,10 @@ namespace Net
         readHead();
     }
 
-    /// @brief      关闭socket
-    /// @details    关闭socket并处理发送队列，触发一次关闭回调
-    /// @warning    内部使用，禁止外部直接调用
-    /// @note
+    /// @brief      只关闭socket
+    /// @details    关闭 socket（shutdown + close）并复位发送状态，随后触发一次 derivedToClose()
+    /// @warning    内部使用，禁止外部直接调用；调用前必须清空所有发送
+    /// @note       由 closeSocket 标志保证只执行一次
     void Connection::socketClose()
     {
         // 检查socket状态
@@ -290,9 +299,10 @@ namespace Net
         }
     }
 
-    /// @brief 正常退出时调用此函数
-    /// @details 正常退出时直接清理消息队列，发送完毕后关闭
-    /// @warning 调用后连接不可用，会发送通知消息
+    /// @brief      正常退出时调用此函数
+    /// @details    线程安全：post 到 IO 线程执行 connectionClose()，先把发送队列中已排队的消息发完再关闭 socket
+    /// @warning    调用后连接不再接收新消息，最终断开
+    /// @note       幂等，可重复调用（"是否已关过"由 IO 线程内的 closing.exchange 判定）
     void Connection::stopToClose()
     {
         // 是否"已经关过"由 IO 线程内的 closing.exchange 判定，
@@ -302,10 +312,10 @@ namespace Net
         boost::asio::post(socket.get_executor(), [this, self]() { connectionClose(); });
     }
 
-    /// @brief      connection连接的正常关闭连接
-    /// @details    关闭请求
-    /// @warning    异步执行，调用后连接不再可用
-    /// @note
+    /// @brief      推进关闭流程
+    /// @details    幂等：有写在飞则等写完成回调续接；队列非空则先发完；都满足后关闭 socket
+    /// @warning    只能在 IO 线程内执行；外部线程请调用 stopToClose()
+    /// @note       重复调用只有第一次生效（closing.exchange 判定）
     void Connection::connectionClose()
     {
         // 只允许第一次调用推进关闭流程
@@ -332,8 +342,9 @@ namespace Net
         socketClose();
     }
 
-    /// @brief 续接关闭流程（只由写完成回调调用：此时不再做 closing 早退判断）
-    /// @details
+    /// @brief      续接关闭流程（只由写完成回调调用：此时不再做 closing 早退判断）
+    /// @details    未进入关闭流程时直接返回；仍有写在飞则等待下一次完成回调；队列发完后关闭 socket
+    /// @note       仅在 IO 线程内调用
     void Connection::continueClose()
     {
         // 只由写完成回调调用；未进入关闭流程时什么都不做
@@ -357,9 +368,10 @@ namespace Net
         socketClose();
     }
 
-    /// @brief 出错时调用此函数
-    /// @details 错误时直接清理消息队列，不再发送完毕后关闭
-    /// @warning 调用后连接不可用，且不会发送通知消息
+    /// @brief      出错时调用此函数
+    /// @details    直接清空发送队列、置位 closing 并关闭 socket，不等待队列发完
+    /// @warning    须在 IO 线程内调用；调用后连接不可用，队列中未发送的消息会被丢弃
+    /// @note       已关闭（closeSocket 为真）时直接返回，避免重复清理
     void Connection::errToClose()
     {
         if (closeSocket.load())
@@ -378,8 +390,8 @@ namespace Net
 
     /// @brief      读取头部
     /// @details    异步读取消息头部（ID与长度），校验后进入消息体读取
-    /// @warning    解析失败或长度非法会关闭连接
-    /// @note
+    /// @warning    读取失败或长度非法（<=0 或超过 MAX_LENGTH）会关闭连接
+    /// @note       读取前会重建 recvNode，长度固定为 HEAD_LENGTH
     void Connection::readHead()
     {
         // 保活
@@ -481,11 +493,11 @@ namespace Net
     }
 
     /// @brief      读取消息体
-    /// @details    异步读取消息体内容，读取完成后回调业务处理函数
+    /// @details    异步读取消息体内容，读取完成后回调 recvToWork()，随后继续读取下一个头部
     /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] msg_len 消息体长度
     /// @warning    业务回调抛出的异常会被捕获并关闭连接
-    /// @note
+    /// @note       入口处会再次检查 closing；处于关闭流程时丢弃本条消息并走优雅关闭
     void Connection::readBody(unsigned long long msg_id, int msg_len)
     {
         // 检查是否在关闭状态
@@ -501,7 +513,7 @@ namespace Net
         // 保活
         auto self = shared_from_this();
 
-        // 尝试先清理,避免因为之前的缓存影响
+        // 重建接收缓存，避免上一条消息的残留影响
         try
         {
             // 申请接收缓存
@@ -542,7 +554,7 @@ namespace Net
                                     // 设置目标长度
                                     recvNode->setCurLen(recvNode->getTotalLen());
 
-                                    // 消息装换为string类型
+                                    // 消息转换为string类型
                                     std::string msg(recvNode->getBuf(), recvNode->getCurLen());
 
                                     Utils::Out::outMsg("接收完成");
@@ -567,20 +579,21 @@ namespace Net
                                         Utils::Out::outErr("未知异常");
                                         errToClose();
                                     }
-                                    // 如果现在socket连接并且不在关闭状态
+                                    // socket 仍打开且未进入关闭流程
                                     if (socket.is_open() && !closing)
                                     {
-                                        // 继续等待下次读取头文件
+                                        // 继续读取下一个消息头
                                         readHead();
                                     }
                                 });
     }
 
     /// @brief      发送任务创建
-    /// @details    外部发送函数，显式指定 msg_id，内部转调 send
+    /// @details    外部发送函数，显式指定 msg_id，校验通过后内部转调 send() 投递到 IO 线程
     /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] msg 消息序列化字符串
-    /// @warning    禁止传入空消息或超长消息，就会抛出异常
+    /// @return     已成功投递返回 true；消息为空或超过 MAX_LENGTH 返回 false
+    /// @warning    线程安全，可在业务线程直接调用；消息非法时只返回 false，不会抛出异常
     /// @note
     bool Connection::toSend(unsigned long long msg_id, const std::string& msg)
     {
@@ -600,11 +613,11 @@ namespace Net
     }
 
     /// @brief      发送消息到发送队列
-    /// @details    把消息封装为发送任务并加入发送队列，线程安全
+    /// @details    把消息封装为发送任务（12 字节消息头 + 消息体）并加入发送队列，线程安全，可在外部线程调用
     /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] msg 消息序列化字符串
-    /// @warning    禁止传入空消息或超长消息
-    /// @note
+    /// @warning    队列积压（queueBufLen + 本条消息体长度）超过 maxSendBufLen 时，在 IO 线程内抛出 std::invalid_argument
+    /// @note       任务 post 到 IO 线程执行，实际入队与发送都在 IO 线程内完成
     void Connection::send(unsigned long long msg_id, std::string msg)
     {
         // 保活获取自身this指针
@@ -651,7 +664,7 @@ namespace Net
                               // 外层 lambda 已在 IO 线程中执行，直接入队
                               sendQueue.push_back(send_node);
 
-                              // 判断发送对列是否有空余
+                              // 判断发送队列是否还有空余（超过上限则抛出异常）
                               if (msg.size() + queueBufLen > maxSendBufLen)
                               {
                                   throw std::invalid_argument("发送错误，队列内存已满");
@@ -686,9 +699,9 @@ namespace Net
     }
 
     /// @brief      发送消息
-    /// @details    从发送队列取出任务并异步发送，IO线程内调用
-    /// @warning    发送失败会丢弃剩余队列并关闭连接
-    /// @note
+    /// @details    从发送队列取出队首任务并异步发送，发送完成后继续取下一条
+    /// @warning    仅在 IO 线程内调用；发送失败会丢弃剩余队列并关闭连接
+    /// @note       队列为空时复位 sending，并在关闭流程中调用 continueClose()
     void Connection::doSend()
     {
         // 判断是否有发送的消息
@@ -696,7 +709,7 @@ namespace Net
         {
             // 将发送状态变量更新
             sending = false;
-            // 队列发完且未请求过关闭
+            // 队列已空且正处于关闭流程：继续推进关闭
             if (closing)
             {
                 stopToClose();

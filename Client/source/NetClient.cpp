@@ -1,5 +1,5 @@
-/// @file        NetClient.h
-/// @brief       网络通讯客户端远吗
+/// @file        NetClient.cpp
+/// @brief       网络通讯客户端实现（异步连接、消息回调、优雅停止）
 /// @author      jyoushitou
 /// @date        2026-09-16
 /// @copyright   Copyright (c) 2026
@@ -15,9 +15,9 @@ namespace Net
     namespace Client
     {
         /// @brief      开始函数
-        /// @details    发出连接测试请求并启动连接的异步读取流程
+        /// @details    先发送 ID 为 0 的 "check connection" 测试消息，再调用基类启动异步读取流程
         /// @warning    须在socket连接建立后调用
-        /// @note
+        /// @note       基类的读取流程幂等（started 标志），但本函数每次调用都会再发一条测试消息
         void Client::start()
         {
             // 发出连接测试请求
@@ -25,45 +25,48 @@ namespace Net
 
             Utils::Out::outMsg("客户端发出连接测试请求");
 
-            // 等待回复
+            // 启动基类的异步读取流程（回复由消息回调处理）
             Connection::start();
         }
 
-        /// @brief 获取端口和ip
-        /// @return 返回hostport结构体
+        /// @brief      获取端口和ip
+        /// @return     本客户端保存的 HostPort（host + port）
+        /// @note
         HostPort Client::getHostPort()
         {
             return HP;
         }
 
         /// @brief      构造函数
-        /// @details    唯一的构造函数
+        /// @details    唯一的构造函数：创建裸 socket 交给基类，并保存回调、地址端口与发送上限
         /// @param[in] io 保存会话的io_context
-        /// @param[in] serviceID 服务ID，用于日志打印
-        /// @warning    生命周期须长于本客户端
+        /// @param[in] HF 消息回调（unique_ptr 转移所有权，可为空）
+        /// @param[in] HP 服务器地址与端口
+        /// @param[in] CF 解析/连接失败时的业务关闭回调（unique_ptr 转移所有权，可为空）
+        /// @param[in] maxSendBufLen 发送队列允许积压的最大字节数
+        /// @warning    io 的生命周期须长于本客户端
         /// @note
         Client::Client(boost::asio::io_context& io, std::unique_ptr<HandleFunction> HF, HostPort HP,
                        std::unique_ptr<CloseFunction> CF, int maxSendBufLen)
             : Connection(boost::asio::ip::tcp::socket(io), io, maxSendBufLen), resolver(io)
         {
-            // 注册回调
+            // 保存消息回调
             this->HF = std::move(HF);
-            // 注册host和port
+            // 保存服务器地址与端口
             this->HP = HP;
 
             // 转移所有权到client
             this->CF = std::move(CF);
 
-            // 初始状态
+            // 关闭通知标记复位
             closeNotifiedByUser = false;
         }
 
         /// @brief      连接服务器端
-        /// @details    异步解析地址并建立连接，成功后自动调用 start()
-        /// @param[in] host 服务器地址
-        /// @param[in] port 服务器端口
-        /// @warning    须在 IO 线程启动前调用
-        /// @note
+        /// @details    用成员 resolver 异步解析 HP.host / HP.port，再 async_connect；
+        ///             连接成功后设置 NoDelay 并调用 start()
+        /// @warning    须在 io_context.run() 之前调用，否则异步操作无人驱动
+        /// @note       解析或连接失败会回调 CloseFunction 并关闭连接
         void Client::Connect()
         {
             // 保活：延长本对象生命周期至异步操作完成
@@ -81,7 +84,7 @@ namespace Net
                                        if (ec)
                                        {
                                            Utils::Out::outErr("解析地址失败: " + ec.what());
-                                           // 通知主线程退出，防止 WaitForMessage 永久阻塞
+                                           // 该路径只负责通知业务侧并关闭连接（主线程的等待由 Utils::Exit 统一唤醒）
 
                                            // 通知业务侧关闭
                                            talkErrorToWork(ec);
@@ -120,7 +123,7 @@ namespace Net
                                                                       /// @note
                                                                       Utils::Out::outMsg(this->HP.host + "连接成功");
 
-                                                                      // 设置NoDelay
+                                                                      // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
                                                                       offNoDelay();
 
                                                                       start();
@@ -128,12 +131,12 @@ namespace Net
                                    });
         }
 
-        /// @brief 后期转到具体业务
-        /// @details 收到完整消息后回调上层注册的消息回调
-        /// @param msg_id 消息id
-        /// @param msg 消息体
-        /// @warning 仅在 IO 线程内被调用，禁止在此长时间阻塞
-        /// @note
+        /// @brief      后期转到具体业务
+        /// @details    收到完整消息后回调上层注册的消息回调
+        /// @param[in] msg_id 消息id
+        /// @param[in] msg 消息体
+        /// @warning    仅在 IO 线程内被调用，禁止在此长时间阻塞
+        /// @note       HF 为空时本条消息被直接丢弃
         void Client::recvToWork(unsigned long long msg_id, std::string msg)
         {
             if (HF)
@@ -142,7 +145,10 @@ namespace Net
             }
         }
 
-        /// @brief 主函数的关闭函数
+        /// @brief      通知业务侧连接失败
+        /// @details    仅由 Connect() 的解析失败 / 连接失败分支调用；用 closeNotifiedByUser 保证只通知一次
+        /// @param[in] ec 解析或连接失败的错误码
+        /// @note       CF 为空时不通知
         void Client::talkErrorToWork(const boost::system::error_code& ec)
         {
             if (CF && *CF && !closeNotifiedByUser.exchange(true))
@@ -151,14 +157,17 @@ namespace Net
             }
         }
 
+        /// @brief      关闭时的派生类清理
+        /// @details    重写基类纯虚函数；当前为空实现（Client 没有需要额外释放的动态资源）
+        /// @note       由基类 socketClose() 保证只回调一次
         void Client::derivedToClose()
         {
         }
 
         /// @brief      停止函数
-        /// @details    从外部线程安全调用，向 IO 线程投递关闭请求，不丢弃已收到的消息
-        /// @warning    异步执行，调用后连接不再可用
-        /// @note
+        /// @details    从外部线程安全调用，向 IO 线程投递关闭请求，不丢弃发送队列中待发的消息
+        /// @warning    异步执行，调用后连接最终断开
+        /// @note       内部即基类 stopToClose()，幂等
         void Client::Stop()
         {
             stopToClose();

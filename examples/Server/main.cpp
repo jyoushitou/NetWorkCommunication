@@ -4,7 +4,7 @@
 /// @date        2026-09-16
 /// @copyright   Copyright (c) 2026
 
-// Server/source/main.cpp
+// examples/Server/main.cpp
 #include "NetServer.h"
 #include "Utils.h"
 #include "Message.h"
@@ -42,7 +42,7 @@ int main()
     // 创建监听端点
     boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), ListenPort);
 
-    // 业务回调：在 IO 线程中执行，返回值作为回复内容发回客户端
+    // 业务回调：在 IO 线程中执行，无返回值；回复需在回调内调用 session->reply()
     auto handler = std::make_shared<Net::Server::HandleFunction>(
         [](const std::shared_ptr<Net::Server::Session>& session, const unsigned long long& msg_id,
            const std::string& msg)
@@ -54,13 +54,13 @@ int main()
             session->reply(msg_id, "服务器已经收到消息");
         });
 
-    // 创建服务器对象
-    auto server = std::make_shared<Net::Server::Server>(io, ep, handler);
+    // 创建服务器对象（会话空闲超时 60 秒、监控线程巡检周期 60 秒、每个会话发送队列上限 100MB）
+    auto server = std::make_shared<Net::Server::Server>(io, ep, handler, 60, 60, 1024 * 1024 * 100);
 
     // 注册优雅退出回调：收到退出信号时停止服务器
     Utils::Exit::registerStopCallback([server]() { server->Stop(); });
 
-    // 开始接收连接
+    // 启动服务器（内部启动失效会话监控线程，并开始 accept）
     server->start();
 
     Utils::Out::outMsg("服务器启动，监听端口 " + std::to_string(ListenPort) + " ...等待连接中");

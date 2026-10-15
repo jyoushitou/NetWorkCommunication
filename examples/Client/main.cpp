@@ -1,4 +1,10 @@
-// Client/source/main.cpp
+/// @file        main.cpp
+/// @brief       测试客户端入口（控制台输入发送、多连接管理、优雅退出）
+/// @author      jyoushitou
+/// @date        2026-09-16
+/// @copyright   Copyright (c) 2026
+
+// examples/Client/main.cpp
 #include "NetClient.h"
 #include "Utils.h"
 #include "Message.h"
@@ -22,15 +28,16 @@
 ///             只有回到「源码内置 / 静态库」形态时才需要在程序里补这份定义。
 
 /// @brief 存储客户端及其运行环境
-/// @note 成员声明顺序决定析构逆序：iot -> client
-///       必须保证 client 先于 io_context 析构，避免 socket 访问已释放的 io_context
+/// @note 成员声明顺序决定析构逆序：先析构 iot（IO 线程），再析构 client；
+///       对应的 io_context 由全局 g_ios 持有，必须保证它晚于 client 释放
 struct ClientPtr
 {
     /// @brief 客户端指针
-    /// @note client客户端指针，hostport存储ip端口
+    /// @note client 指向本连接对应的客户端对象（地址与端口保存在其内部）
     std::shared_ptr<Net::Client::Client> client;
 
     /// @brief io线程
+    /// @details 驱动该客户端专属 io_context 的线程
     std::thread iot;
 };
 
@@ -54,8 +61,9 @@ std::atomic<unsigned long long> g_msg_id{0};
 std::atomic<bool> g_running{true};
 
 /// @brief 对应业务的回调
-/// @param msg_id 消息id
-/// @param msg 消息
+/// @param[in] msg_id 消息id
+/// @param[in] msg 消息
+/// @note 在对应连接的 IO 线程内被调用，禁止长时间阻塞
 void HandleWork(unsigned long long msg_id, std::string msg)
 {
     Utils::Out::outNetMsg(msg_id, "服务器发来的消息：" + msg);
@@ -78,10 +86,10 @@ void CreateConnection(const Net::Client::HostPort& HP)
 
     ClientPtr cp;
 
-    // 创建线程独立的客户端：构造函数内部会异步发起连接
-    // （此时 io_context 尚未 run，异步操作先入队，随后由 IO 线程驱动）
-    cp.client =
-        std::make_shared<Net::Client::Client>(io, std::make_unique<Net::Client::HandleFunction>(HandleWork), HP);
+    // 创建本连接专属的客户端（构造函数只做参数保存，真正的异步连接由下面的 Connect() 发起）
+    cp.client = std::make_shared<Net::Client::Client>(
+        io, std::make_unique<Net::Client::HandleFunction>(HandleWork), HP,
+        std::make_unique<Net::Client::CloseFunction>([](const boost::system::error_code) {}), 1024 * 1024 * 100);
 
     // 连接
     cp.client->Connect();
@@ -174,7 +182,7 @@ int main()
                 }
                 catch (const std::exception& e)
                 {
-                    // toSend 对空消息/超长消息会抛异常，这里兜底防止线程退出
+                    // toSend 对空消息/超长消息只返回 false；发送队列超限才会抛异常，这里兜底防止线程退出
                     Utils::Out::outErr(std::string("发送失败：") + e.what());
                 }
             }
@@ -207,7 +215,7 @@ int main()
         }
     }
 
-    // 此时 handler 队列已空，再销毁 client 与 io_context 才是安全的
+    // 各 IO 线程已结束、异步操作队列已排空，此时销毁 client 与 io_context 才是安全的
     clients.clear();
     g_ios.clear();
 

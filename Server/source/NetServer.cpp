@@ -3,9 +3,8 @@
 /// @author      jyoushitou
 /// @date        2026-09-16
 /// @copyright   Copyright (c) 2026
-/// Distributed under the MIT License. See LICENSE file.
+/// @license     MIT License（详见仓库根目录的 LICENSE 文件）
 
-//
 #include "NetServer.h"
 
 #include "Utils.h"
@@ -19,12 +18,13 @@ namespace Net
     namespace Server
     {
         /// @brief      构造函数
-        /// @details    session的构造
+        /// @details    session的构造：接管 socket，保存业务回调、超时时间与发送上限，并初始化活动时间
         /// @param[in] io 连接的io_context
-        /// @param[in] sock 连接的socket
-        /// @param[in] HF 消息回调函数
-        /// @param[in] timeout 超时时间
-        /// @note 默认60s超时
+        /// @param[in] sock 连接的socket（按值传入，内部 move 给基类）
+        /// @param[in] HF 消息回调函数（可为空，为空时收到消息即关闭会话）
+        /// @param[in] timeout 空闲超时时间（秒）
+        /// @param[in] maxSendBufLen 发送队列允许积压的最大字节数
+        /// @note       timeout 传 0 时回退为默认 60 秒
         Session::Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                          std::shared_ptr<HandleFunction> HF, long long timeout, int maxSendBufLen)
             : Connection(std::move(sock), io, maxSendBufLen)
@@ -33,7 +33,7 @@ namespace Net
             stop = false;
             // 给回调函数赋值
             this->HF = HF;
-            // 给timeout赋值初始化为60s
+            // timeout 为 0 时回退为默认 60 秒
             this->timeout = timeout ? timeout : 60;
 
             // 初始化时间
@@ -41,11 +41,12 @@ namespace Net
         }
 
         /// @brief      业务处理
-        /// @details    收到消息后的具体业务实现，由基类回调触发：输出消息、
-        ///             调用回调函数并把响应回复给客户端
+        /// @details    收到消息后的具体业务实现，由基类回调触发：输出消息、调用回调函数并把响应回复给客户端；
+        ///             消息内容等于 kCloseCommand 时直接关闭会话
         /// @param[in] msg_id 消息全局唯一ID
         /// @param[in] msg 消息序列化字符串
         /// @warning    禁止在回调内部长时间阻塞，会阻塞asio事件循环
+        /// @note       未设置回调函数（HF 为空）时也会关闭会话
         void Session::recvToWork(const unsigned long long msg_id, std::string msg)
         {
             // 输出收到的消息
@@ -85,17 +86,20 @@ namespace Net
         }
 
         /// @brief      获取自身的指针
-        /// @details    获取可以用于向上转型的自身指针
+        /// @details    把 shared_from_this() 向下转型为 Session 的 shared_ptr（static_pointer_cast）
+        /// @return     Session 的 shared_ptr（static_pointer_cast 不做运行时校验，正常不会为空）
+        /// @warning    仅在对象由 shared_ptr 持有时可用，否则 shared_from_this() 抛出 std::bad_weak_ptr
         std::shared_ptr<Session> Session::getSession()
         {
             return std::static_pointer_cast<Session>(shared_from_this());
         }
 
         /// @brief      回复消息
-        /// @details    主线程调用，向该客户端回复一条消息
+        /// @details    线程安全的发送入口（内部 post 到 IO 线程），向该客户端回复一条消息
         /// @param[in] msg_id 消息全局唯一ID
         /// @param[in] msg 消息序列化字符串
-        /// @warning    禁止在回调或事件循环中长时间阻塞
+        /// @warning    禁止在回调或事件循环中长时间阻塞；msg 为空时只打印错误日志并丢弃
+        /// @note
         void Session::reply(unsigned long long msg_id, const std::string& msg)
         {
             if (msg.empty())
@@ -111,7 +115,9 @@ namespace Net
         }
 
         /// @brief      关闭函数
-        /// @details    用于正常的关闭session连接，供服务器关闭线程调用
+        /// @details    置位停止标志 stop，并调用基类的优雅关闭（先把发送队列发完再断开）
+        /// @warning    线程安全，实际关闭动作在 IO 线程内完成
+        /// @note       对象析构由 Server 的监控线程在回收 sessions 时完成
         void Session::closeSession()
         {
             stop = true;
@@ -121,21 +127,25 @@ namespace Net
 
         /// @brief 重写关闭最后的流程
         /// @details 用于在session最后关闭时销毁其他动态数据
+        /// @warning 当前是空实现：Session 没有需要额外释放的动态资源
+        /// @note 由基类 socketClose() 保证只回调一次
         void Session::derivedToClose()
         {
         }
 
         /// @brief      更新连接时间
-        /// @details    用于更新时间，超时自动关闭连接，避免占线
-        /// @note       在操作后记得调用此函数刷新时间
+        /// @details    刷新 lastTime，供超时巡检使用，避免空闲连接长期占线
+        /// @note       重写基类虚函数；每次读写操作后由基类调用，也可手动调用
         void Session::updateTime()
         {
             // 更新成员变量 lastTime（不能写成局部变量，否则只是遮蔽，等于没更新）
             lastTime = Utils::Time::nowTime();
         }
 
-        /// @brief 判断是否超时
-        /// @return
+        /// @brief      判断是否超时
+        /// @details    以最后一次活动时间 lastTime 为基准，与 timeout 比较
+        /// @return     true超时，false未超时
+        /// @note       由监控线程在 IO 线程内调用
         bool Session::timeOut()
         {
             return timeout < Utils::Time::computeTime(lastTime);
@@ -155,10 +165,15 @@ namespace Net
         //===Server===
 
         /// @brief      构造函数
-        /// @details    服务器的构造，完成 acceptor 的 open / set_option / bind / listen
+        /// @details    服务器的构造，完成 acceptor 的 open / set_option / bind / listen，并保存各项参数
         /// @param[in] io 服务器的io_context
         /// @param[in] ep 监听的本地端点（地址与端口）
-        /// @warning    须保证 io 的生命周期长于本服务器
+        /// @param[in] HF 业务处理回调（回调内调用 session->reply 回复，库不会自动回包）
+        /// @param[in] timeOut 会话空闲超时时间（秒）
+        /// @param[in] checkTime 监控线程检查会话的周期（秒）
+        /// @param[in] maxSendBufLen 每个会话的发送队列允许积压的最大字节数
+        /// @warning    须保证 io 的生命周期长于本服务器；非正数入参会回退为默认值（60 / 60 / 10MB）并打印错误日志
+        /// @note
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
                        std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime, int maxSendBufLen)
             : ioc(io), acceptor(io)
@@ -183,7 +198,7 @@ namespace Net
                 Utils::Out::outErr("timeOut / checkTime 非法，已回退为默认 60 秒");
             }
 
-            // 初始化每个session的最大发送内存
+            // 初始化每个 session 的发送队列上限（非正数回退为 10MB）
             this->maxSendBufLen = maxSendBufLen ? maxSendBufLen : 1024 * 1024 * 10;
 
             // 判断maxSendBufLen是否合法
@@ -198,8 +213,8 @@ namespace Net
         }
 
         /// @brief      析构函数
-        /// @details    停止服务器并回收清理线程，先stop()再join线程
-        /// @note
+        /// @details    先 Stop() 停服并关闭所有会话，再 join 监控线程
+        /// @note       派生类析构会自动调用基类析构；join 后可避免 std::thread 析构时 std::terminate
         Server::~Server()
         {
             // 先触发停止：置 running=false 并关闭 acceptor / 会话
@@ -212,6 +227,10 @@ namespace Net
             }
         }
 
+        /// @brief 启动
+        /// @details 置 running、绑定 selfWeak（监控线程靠它保活），随后启动监控线程并开始 accept
+        /// @warning 会启动一个监控线程；调用者必须已经用 shared_ptr 持有本对象
+        /// @note 幂等：已在运行时只打印提示；Stop() 后重启会先 join 掉上一轮的监控线程
         void Server::start()
         {
             // 判断是否已经启动
@@ -240,8 +259,9 @@ namespace Net
 
         /// @brief      开始接受连接
         /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
-        ///             并为每个新连接创建对应的 Session
-        /// @warning    须在 io_context 运行后调用
+        ///             为每个新连接创建对应的 Session（关闭 NoDelay）后继续接受下一个连接
+        /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略
+        /// @note       accept 失败时等 100ms 重试，服务器已停止则不再重试
         void Server::StartAccept()
         {
             // 保活 Server 自身
@@ -250,7 +270,7 @@ namespace Net
             // 创建一个 socket 用于 accept
             auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
 
-            // 异步连接
+            // 异步等待并接受新连接
             acceptor.async_accept(
                 *sock,
                 [this, self, sock](boost::system::error_code ec)
@@ -265,7 +285,7 @@ namespace Net
                         // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
                         // 构造函数按值接收 socket，需 std::move(*sock)
                         auto session = std::make_shared<Session>(ioc, std::move(*sock), HF, timeOut, maxSendBufLen);
-                        // 关闭NoDelay
+                        // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
                         session->offNoDelay();
                         // 将session放入sessions里面
                         sessions.push_back(session);
@@ -299,18 +319,21 @@ namespace Net
                 });
         }
 
-        /// @brief      清理失效会话
-        /// @details    投递到 io_context 线程内，移除空指针会话（供监控线程调用）
+        /// @brief      监控线程主体
+        /// @details    按 checkTime 周期睡眠（可被 Stop() 立即唤醒），醒来后 post 到 io_context：
+        ///             对超时会话发送提示并关闭，随后移除已关闭的会话
+        /// @warning    在独立线程中运行，禁止直接访问只在 IO 线程内读写的 sessions
+        /// @note       每轮都通过 selfWeak 取保活指针，取不到说明 Server 已析构，直接退出
         void Server::clearSession()
         {
-            // 在关闭时结束进程
+            // 服务器运行期间循环巡检（running=false 后退出循环）
             while (running.load())
             {
                 {
                     // 创建锁变量
                     std::unique_lock<std::mutex> lock(queueMutex);
 
-                    // 获取运行状态
+                    // 拿到锁后再确认一次运行状态
                     if (!running.load())
                     {
                         break;
@@ -334,7 +357,7 @@ namespace Net
                 boost::asio::post(ioc,
                                   [this, self]()
                                   {
-                                      // 挨个检验线程
+                                      // 逐个会话检查
                                       for (auto& it : sessions)
                                       { // 判断是否超时
                                           if (it->timeOut() && !it->isClosed())
@@ -374,8 +397,9 @@ namespace Net
         }
 
         /// @brief      停止服务器
-        /// @details    停止接受新连接并关闭所有会话
+        /// @details    置 running=false 并 notify_all 唤醒监控线程，再 post 到 IO 线程关闭 acceptor、逐个关闭会话
         /// @warning    调用后服务器不再接受新连接，须重新构造使用
+        /// @note       幂等，可重复调用；Server 尚未 start()（selfWeak 为空）时只置标志
         void Server::Stop()
         {
             {
@@ -385,7 +409,7 @@ namespace Net
                 running = false;
             }
 
-            // 唤醒主线程，让它退出等待
+            // 唤醒正在周期等待的监控线程，让它立即退出等待
             queueCV.notify_all();
 
             // 保活，不保存引用
@@ -396,11 +420,11 @@ namespace Net
                 return;
             }
 
-            // 跨线程输入
+            // post 到 IO 线程执行关闭动作
             boost::asio::post(ioc,
                               [this, self]()
                               {
-                                  // 关闭连接
+                                  // 关闭 acceptor，不再接受新连接
                                   boost::system::error_code ec;
                                   acceptor.close(ec);
 

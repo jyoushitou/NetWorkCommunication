@@ -24,11 +24,12 @@
 - 跨平台字节序转换（自定义 `htonll` / `ntohll`，兼容 Windows / Linux）
 - 发送队列自动串行化，`sending` 标志避免并发写 socket；`stopToClose()` 会先发完队列再关闭（优雅关闭），`errToClose()` 则直接清空队列立即关闭
 - 独立的发送/接收缓冲区类（`MsgNode` / `RecvNode` / `SendNode`）
-- 连接基类 `Net::Connection`（继承 `enable_shared_from_this`），封装 `readHead` / `readBody` / `doSend` / `send` / `stopToClose` / `errToClose`（内部经 `connectionClose` → `socketClose` 完成关闭）
+- 连接基类 `Net::Connection`（继承 `enable_shared_from_this`），封装 `readHead` / `readBody` / `doSend` / `send` / `toSend` / `stopToClose` / `errToClose` / `offNoDelay`（内部经 `connectionClose` → `continueClose` → `socketClose` 完成关闭），`toSend` 对空消息 / 超长消息返回 `false`（不再抛异常）
 - 服务端 `Net::Server::Server`：`start()` 同时启动监听与失效会话监控线程，`Stop()` 幂等优雅退出
-- 服务端会话 `Net::Server::Session`：回调式业务处理（`HandleFunction` 签名为 `void(const std::shared_ptr<Session>&, const unsigned long long&, const std::string&)`，回调内调用 `session->reply(msg_id, msg)` 回复），空闲超时自动断开（默认 60s）
-- 客户端 `Net::Client::Client`：`Connect()` 异步解析并连接（`resolver` 为成员保证生命周期），连接成功后自动发送连接测试并开始读
-- 客户端支持多连接并行（每连接独立 `io_context` + 独立线程）
+- 服务端会话 `Net::Server::Session`：回调式业务处理（`HandleFunction` 签名为 `void(const std::shared_ptr<Session>&, const unsigned long long&, const std::string&)`，回调内调用 `session->reply(msg_id, msg)` 回复），空闲超时自动断开（默认 60s），收到关闭命令 `"EXIT"`（`kCloseCommand`）即关闭会话
+- 客户端 `Net::Client::Client`：`Connect()` 异步解析并连接（`resolver` 为成员保证生命周期），连接成功后 `start()` 先发送 ID 为 0 的 `"check connection"` 测试消息再开始读
+- 客户端支持独立的关闭回调 `Net::Client::CloseFunction`（`std::function<void(const boost::system::error_code)>`），解析 / 连接失败或出错时通知业务侧，内部 `closeNotifiedByUser` 保证最多回调一次
+- 客户端支持多连接并行：每连接独立 `io_context` + 独立 `io_thread`；同一个 `io_context` 只允许由一个线程 `run()`，须先 `Connect()` 再启动 IO 线程
 - `Common` / `Utils` / `Net` 分层命名，构建期别名与安装后导出名一致，支持 `find_package(CommonNet)` 复用
 - 强制 x64 构建兜底校验（避免与 vcpkg x64 依赖混编报 `LNK1112`）
 
@@ -78,6 +79,7 @@ NetWorkCommunication/
 ├── build/                       # 构建产物目录（cmake -B build），不提交，已由 .gitignore 忽略
 ├── out/                         # IDE（VS/CMake 集成）输出目录，不提交，已由 .gitignore 忽略
 ├── CMakeLists.txt               # 根构建入口：统一生成 CommonUtils/CommonNetCore/CommonNetServer/CommonNetClient（提交）
+├── .clang-format                # 统一代码格式约定（提交）
 ├── .gitignore                   # 忽略 build/out/lib/install/*.lib/*.exe 等产物（提交）
 ├── LICENSE
 └── README.md
@@ -216,8 +218,9 @@ auto handler = std::make_shared<Net::Server::HandleFunction>(
             session->reply(msg_id, "服务器已经收到消息");
         });
 
-// 创建服务器（最后一个参数为会话空闲超时秒数，默认 60）
-auto server = std::make_shared<Net::Server::Server>(io, ep, handler);
+// 创建服务器：Server(io, ep, HF, timeOut=60, checkTime=60, maxSendBufLen=10MB)
+// timeOut 为会话空闲超时秒数，checkTime 为巡检周期秒数，maxSendBufLen 为单会话发送队列上限
+auto server = std::make_shared<Net::Server::Server>(io, ep, handler, 60, 60, 1024 * 1024 * 100);
 
 // 注册优雅退出回调（Ctrl+C / 关窗时由 Utils::Exit 触发）
 Utils::Exit::registerStopCallback([server]() { server->Stop(); });
@@ -254,8 +257,12 @@ auto handler = std::make_unique<Net::Client::HandleFunction>(
 // 服务器地址与端口
 Net::Client::HostPort HP{"127.0.0.1", "26990"};
 
-// 创建客户端
-auto client = std::make_shared<Net::Client::Client>(io, std::move(handler), HP);
+// 关闭回调（连接失败/出错时被调用，最多通知一次；可为空实现）
+auto closeCB = std::make_unique<Net::Client::CloseFunction>([](const boost::system::error_code) {});
+
+// 创建客户端：Client(io, HF, HostPort, CloseFunction, maxSendBufLen)
+auto client = std::make_shared<Net::Client::Client>(io, std::move(handler), HP, std::move(closeCB),
+                                                   1024 * 1024 * 100);
 
 // 异步连接（内部 async_resolve + async_connect，resolver 为成员保证生命周期）
 // 必须在启动 IO 线程之前调用，保证 io_context 中已有异步任务
@@ -285,7 +292,9 @@ boost::asio::io_context& io = *g_ios.back();
 
 ClientPtr cp;
 cp.client = std::make_shared<Net::Client::Client>(
-    io, std::make_unique<Net::Client::HandleFunction>(HandleWork), HP);
+    io, std::make_unique<Net::Client::HandleFunction>(HandleWork), HP,
+    std::make_unique<Net::Client::CloseFunction>([](const boost::system::error_code) {}),
+    1024 * 1024 * 100);
 
 cp.client->Connect();          // 先发起异步连接
 clients.push_back(std::move(cp));
@@ -352,7 +361,10 @@ auto handler = std::make_unique<Net::Client::HandleFunction>(
     });
 
 Net::Client::HostPort HP{"127.0.0.1", "26990"};
-auto client = std::make_shared<Net::Client::Client>(io, std::move(handler), HP);
+auto client = std::make_shared<Net::Client::Client>(
+    io, std::move(handler), HP,
+    std::make_unique<Net::Client::CloseFunction>([](const boost::system::error_code) {}),
+    1024 * 1024 * 100);
 client->Connect();
 
 // 发送带业务命令字的消息（显式指定消息 ID = 业务命令字）
@@ -374,7 +386,7 @@ client->toSend(1001, "查询订单: 20240001");
 
 1. **单线程事件循环**：每个连接/服务器一个 `io_context`，所有 socket 读写都在其 IO 线程执行；业务线程通过 `boost::asio::post` 把发送 / 关闭任务投递到 IO 线程，避免数据竞争。
 
-2. **跨线程发送**：`Connection::toSend()` 先做空消息 / 超长校验（非法即抛异常），`send()` 内部 `post` 到 socket executor，在 IO 线程中构建 `SendNode`（写 8 字节 ID + 4 字节长度 + 消息体）并入队。
+2. **跨线程发送**：`Connection::toSend()` 先做空消息 / 超长校验（非法直接返回 `false`，不抛异常），`send()` 内部 `post` 到 socket executor，在 IO 线程中构建 `SendNode`（写 8 字节 ID + 4 字节长度 + 消息体）并入队；入队前还会校验发送队列累计长度是否超过 `maxSendBufLen`，超限则抛异常并关闭连接。
 
 3. **发送队列**：`sendQueue` 保存待发送消息，`sending` 标志防止并发写；发送完成后自动取出下一条继续发送。`stopToClose()` 请求后若队列仍有数据，会先发完再关闭（优雅关闭）；异步写回调中通过比对队首节点避免 `deque` 空弹出的 Debug 断言。
 
@@ -387,9 +399,9 @@ client->toSend(1001, "查询订单: 20240001");
 7. **优雅退出（基于 vcpkg 的 Utils）**：
    - 通过 `Utils::Exit::registerStopCallback(...)` 注册停止函数，`Utils::Exit::waitExit()` 阻塞主线程，Ctrl+C / 关窗 / 输入结束（`Utils::Exit::recviceExit()`）时统一触发。
    - 服务端：`Stop()` 置 `running=false`、`notify_all` 唤醒监控线程，并 `post` 到 IO 线程关闭 acceptor、逐个关闭会话；`~Server()` 先 `Stop()` 再 `join` 监控线程，避免 `std::thread` 析构时的 `std::terminate`。
-   - 客户端：`Stop()` 向 IO 线程投递关闭请求；主线程随后 `io->stop()` 并 `join` 各 IO 线程；阻塞在 `getline` 的输入线程 detach，由进程退出统一回收。
+   - 客户端：`Stop()` 向 IO 线程投递关闭请求；主线程随后 `join` 各 IO 线程（示例有意**不调用** `io->stop()`，等异步操作自然结束后 `run()` 自行返回，避免丢弃在途消息）；阻塞在 `getline` 的输入线程 detach，由进程退出统一回收。销毁顺序上先 `clients.clear()` 再 `g_ios.clear()`，确保 `Client` 先于其 `io_context` 析构。
 
-8. **会话超时清理**：`Server::start()` 启动 `clearSessionThread`，每 60s（可被 `Stop()` 立即唤醒）向 IO 线程投递清理任务：对 `timeOut()` 且未关闭的会话发送提示并关闭，随后从 `sessions` 中移除已关闭会话。
+8. **会话超时清理**：`Server::start()` 启动 `clearSessionThread`，每 `checkTime` 秒（默认 60，可被 `Stop()` 立即唤醒）向 IO 线程投递清理任务：对 `timeOut()` 且未关闭的会话发送提示并关闭，随后从 `sessions` 中移除已关闭会话。
 
 ## 已知问题与修复记录
 
@@ -411,6 +423,10 @@ client->toSend(1001, "查询订单: 20240001");
 - **关闭回调重复触发**:`Connection::socketClose()` 可能被 `readHead` 错误、`readBody` 错误、`stopToClose()` / `errToClose()` 等多次路径触发。已添加 `closeNotified` 标记（`std::atomic<bool>` + `exchange`），保证派生类的 `derivedToClose()` 只被调用一次。
 
 - **关闭后继续读消息**:连接正在关闭（`closing=true`）时，`readHead` 解析到的消息直接丢弃并调用 `stopToClose()` 走优雅关闭，避免对已关闭连接继续发起异步读（`readBody` 入口处也有同样的 `closing` 检查）。
+
+- **`toSend` 由抛异常改为返回 `bool`**:`Connection::toSend()` 现在对空消息 / 超长消息直接返回 `false`（不再抛异常），调用方据此判断是否入队成功即可，示例客户端的输入线程仍保留 `try/catch` 兜底。
+
+- **发送队列内存上限（`maxSendBufLen`）**:`send()` 入队前会以消息体长度累加校验积压量（`queueBufLen`），超过 `maxSendBufLen` 即抛 `std::invalid_argument("发送错误，队列内存已满")` 并关闭连接，防止对端不读取导致内存无限增长。`Server` 默认 `10MB`（非正数入参回退默认值），`Client` 由构造参数指定（示例给 `1024*1024*100`）。
 
 - **非 x64 平台静默混编**:VS 生成器 `-A Win32`、或在 32 位命令提示符中用 Ninja 配置都会悄悄编出 32 位产物，直到链接 vcpkg 的 x64 库才炸 `LNK1112`。已在根 CMakeLists.txt 于 `project()` 之前把平台钉成 x64，并在 `project()` 之后做 x64 兜底校验（`COMMONNET_ALLOW_NON_X64=ON` 可放行）。
 
