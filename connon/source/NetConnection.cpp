@@ -397,7 +397,21 @@ namespace Net
                                     // 看看是否有错误
                                     if (ec)
                                     {
-                                        Utils::Out::outErr(ec.what());
+                                        // 主动关闭引发的取消：正常流程，静默返回
+                                        if (ec == boost::asio::error::operation_aborted)
+                                        {
+                                            return;
+                                        }
+
+                                        if (ec == boost::asio::error::eof || ec == boost::asio::error::connection_reset)
+                                        {
+                                            Utils::Out::outMsg("对端已断开连接");
+                                        }
+                                        else
+                                        {
+                                            Utils::Out::outErr("读取失败：" + ec.what());
+                                        }
+
                                         errToClose();
                                         return;
                                     }
