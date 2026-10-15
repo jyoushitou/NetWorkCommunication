@@ -31,7 +31,7 @@ namespace Net
 
         /// @brief 业务关闭回调类型
         /// @details 用于在出现错误时的处理业务侧问题
-        using CloseFunction = std::function<void()>;
+        using CloseFunction = std::function<void(const boost::system::error_code)>;
 
         /// @brief      客户端连接类
         /// @details    继承自 Connection，负责连接服务器、收发消息并回调上层业务

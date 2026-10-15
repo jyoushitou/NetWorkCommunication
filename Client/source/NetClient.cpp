@@ -143,7 +143,7 @@ namespace Net
         {
             if (CF && *CF && !closeNotifiedByUser.exchange(true))
             {
-                (*CF)();
+                (*CF)(ec);
             }
         }
 
