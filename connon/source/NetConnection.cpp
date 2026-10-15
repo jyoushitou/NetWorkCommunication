@@ -451,6 +451,8 @@ namespace Net
 
                                         // 关闭连接
                                         stopToClose();
+
+                                        return;
                                     }
 
                                     // 启用读取消息体
