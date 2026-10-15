@@ -225,6 +225,9 @@ namespace Net
 
         /// 记录消息体数量
         queueBufLen = 0;
+
+        // 初始化最大的内存大小
+        this->maxSendBufLen = maxSendBufLen;
     }
 
     /// @brief      开始函数
@@ -546,17 +549,17 @@ namespace Net
         // 判断消息体是否合法
         if (msg.empty())
         {
-            throw std::invalid_argument("禁止发送空消息");
+            return false;
         }
         else if (msg.size() > static_cast<std::size_t>(MAX_LENGTH))
         {
-            throw std::invalid_argument("消息体过长，最长为" + std::to_string(MAX_LENGTH) + "字节");
+            return false;
         }
 
         // 判断发送对列是否有空余
         if (msg.size() + queueBufLen > maxSendBufLen)
         {
-            throw std::invalid_argument("当前消息体过长，请稍后重试");
+            return false;
         }
 
         queueBufLen += msg.size();
