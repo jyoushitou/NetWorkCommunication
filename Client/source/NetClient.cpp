@@ -1,6 +1,14 @@
+/// @file        NetClient.h
+/// @brief       网络通讯客户端远吗
+/// @author      jyoushitou
+/// @date        2026-09-16
+/// @copyright   Copyright (c) 2026
+
 #include "NetClient.h"
 
 #include <boost/asio.hpp>
+
+#include "Utils.h"
 
 namespace Net
 {
@@ -111,6 +119,10 @@ namespace Net
                                                                       /// @details    打印日志并启动连接的异步读取流程
                                                                       /// @note
                                                                       Utils::Out::outMsg(this->HP.host + "连接成功");
+
+                                                                      // 设置NoDelay
+                                                                      offNoDelay();
+
                                                                       start();
                                                                   });
                                    });
@@ -135,7 +147,7 @@ namespace Net
         {
             if (CF && *CF && !closeNotifiedByUser.exchange(true))
             {
-                (*CF)();
+                (*CF)(ec);
             }
         }
 

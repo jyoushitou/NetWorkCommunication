@@ -1,3 +1,8 @@
+/// @file        NetClient.cpp
+/// @brief       网络通讯客户端头文件
+/// @author      jyoushitou
+/// @date        2026-09-16
+/// @copyright   Copyright (c) 2026
 #pragma once
 
 #include <string>
@@ -26,7 +31,7 @@ namespace Net
 
         /// @brief 业务关闭回调类型
         /// @details 用于在出现错误时的处理业务侧问题
-        using CloseFunction = std::function<void()>;
+        using CloseFunction = std::function<void(const boost::system::error_code)>;
 
         /// @brief      客户端连接类
         /// @details    继承自 Connection，负责连接服务器、收发消息并回调上层业务
@@ -101,7 +106,7 @@ namespace Net
             std::unique_ptr<CloseFunction> CF;
 
             /// @brief 记录是否已经通知过
-            std::atomic<bool> closeNotifiedByUser = flase;
+            std::atomic<bool> closeNotifiedByUser = false;
         };
     } // namespace Client
 } // namespace Net

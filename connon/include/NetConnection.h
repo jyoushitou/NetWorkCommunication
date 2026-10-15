@@ -7,6 +7,8 @@
 #include <memory>
 #include <string>
 #include <deque>
+#include <atomic>
+#include <cstdint>
 
 #include <boost/asio.hpp>
 
@@ -83,7 +85,7 @@ namespace Net
         /// @return     指向缓冲区首地址的指针
         /// @warning    禁止释放或越界访问
         /// @note
-        char* getBuf() const;
+        char* getBuf();
 
         /// @brief      获取当前读取位置
         /// @return     当前读取位置
@@ -197,12 +199,16 @@ namespace Net
         /// @note
         virtual void start();
 
+        /// @brief 设置NoDelay开启与否
+        /// @details 使用必须在start之前，用于关闭NoDelay
+        void offNoDelay();
+
+    protected:
         /// @brief      析构函数
         /// @details    采用默认析构
         /// @note
         virtual ~Connection() = default;
 
-    protected:
         /// @brief 更新时间
         /// @note 可以重写此函数实现时间的更新
         virtual void updateTime() {};
@@ -295,6 +301,8 @@ namespace Net
         /// @param[in] msg_len 消息体长度
         /// @note
         void readBody(unsigned long long msg_id, int msg_len);
+
+        std::atomic<bool> started = false;
 
         /// @brief      读取缓存
         /// @details    存储当前读取的接收节点

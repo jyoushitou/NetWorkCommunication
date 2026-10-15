@@ -8,10 +8,12 @@
 #include "NetConnection.h"
 
 #include <cstring>
+#include <cstdint>
+#include <stdexcept>
 
 #include <boost/asio.hpp>
 
-#include "Message.h"
+#include "Utils.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -77,7 +79,7 @@ namespace Net
     /// @brief      获取缓存区指针
     /// @return     指向缓冲区首地址的指针
     /// @note
-    char* MsgNode::getBuf() const
+    char* MsgNode::getBuf()
     {
         return buf;
     }
@@ -225,6 +227,23 @@ namespace Net
 
         /// 记录消息体数量
         queueBufLen = 0;
+
+        // 初始化最大的内存大小
+        this->maxSendBufLen = maxSendBufLen;
+    }
+
+    /// @brief 设置NoDelay开启与否
+    /// @details 使用必须在start之前，用于关闭NoDelay
+    void Connection::offNoDelay()
+    {
+        // 关闭的核心语句
+        boost::system::error_code ec;
+        socket.set_option(boost::asio::ip::tcp::no_delay(true), ec);
+
+        if (ec)
+        {
+            Utils::Out::outErr("关闭NoDelay时出现错误（只影响性能，不会对于消息传递有影响）：" + ec.what());
+        }
     }
 
     /// @brief      开始函数
@@ -233,6 +252,10 @@ namespace Net
     /// @note
     void Connection::start()
     {
+        if (started.exchange(true))
+        {
+            return;
+        }
         // 启动读取函数
         readHead();
     }
@@ -256,7 +279,9 @@ namespace Net
         socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         socket.close(ec);
 
+        // 对变量置空
         sending = false;
+        queueBufLen = 0;
 
         // 防止多次通知关闭
         if (!closeNotified.exchange(true))
@@ -392,7 +417,21 @@ namespace Net
                                     // 看看是否有错误
                                     if (ec)
                                     {
-                                        Utils::Out::outErr(ec.what());
+                                        // 主动关闭引发的取消：正常流程，静默返回
+                                        if (ec == boost::asio::error::operation_aborted)
+                                        {
+                                            return;
+                                        }
+
+                                        if (ec == boost::asio::error::eof || ec == boost::asio::error::connection_reset)
+                                        {
+                                            Utils::Out::outMsg("对端已断开连接");
+                                        }
+                                        else
+                                        {
+                                            Utils::Out::outErr("读取失败：" + ec.what());
+                                        }
+
                                         errToClose();
                                         return;
                                     }
@@ -432,6 +471,8 @@ namespace Net
 
                                         // 关闭连接
                                         stopToClose();
+
+                                        return;
                                     }
 
                                     // 启用读取消息体
@@ -546,23 +587,16 @@ namespace Net
         // 判断消息体是否合法
         if (msg.empty())
         {
-            throw std::invalid_argument("禁止发送空消息");
+            return false;
         }
         else if (msg.size() > static_cast<std::size_t>(MAX_LENGTH))
         {
-            throw std::invalid_argument("消息体过长，最长为" + std::to_string(MAX_LENGTH) + "字节");
+            return false;
         }
-
-        // 判断发送对列是否有空余
-        if (msg.size() + queueBufLen > maxSendBufLen)
-        {
-            throw std::invalid_argument("当前消息体过长，请稍后重试");
-        }
-
-        queueBufLen += msg.size();
 
         // 加入发送队列
         send(msg_id, msg);
+        return true;
     }
 
     /// @brief      发送消息到发送队列
@@ -616,6 +650,14 @@ namespace Net
 
                               // 外层 lambda 已在 IO 线程中执行，直接入队
                               sendQueue.push_back(send_node);
+
+                              // 判断发送对列是否有空余
+                              if (msg.size() + queueBufLen > maxSendBufLen)
+                              {
+                                  throw std::invalid_argument("发送错误，队列内存已满");
+                              }
+
+                              queueBufLen += msg.size();
 
                               updateTime();
 
@@ -691,6 +733,10 @@ namespace Net
                                      {
                                          queueBufLen -= send_node->getCurLen();
                                          sendQueue.pop_front();
+                                         if (queueBufLen < 0)
+                                         {
+                                             queueBufLen = 0;
+                                         }
                                      }
 
                                      // 判断队列是否为空

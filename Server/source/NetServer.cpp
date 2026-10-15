@@ -60,7 +60,7 @@ namespace Net
                 return;
             }
 
-            if (msg.c_str() == kCloseCommand)
+            if (msg == kCloseCommand)
             {
                 // 收到退出信号
                 // 关闭这次会话，最后析构交给Server的监控线程
@@ -265,6 +265,9 @@ namespace Net
                         // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
                         // 构造函数按值接收 socket，需 std::move(*sock)
                         auto session = std::make_shared<Session>(ioc, std::move(*sock), HF, timeOut, maxSendBufLen);
+                        // 关闭NoDelay
+                        session->offNoDelay();
+                        // 将session放入sessions里面
                         sessions.push_back(session);
                         // 启动读（继承自 Connection::start()）
                         session->start();
