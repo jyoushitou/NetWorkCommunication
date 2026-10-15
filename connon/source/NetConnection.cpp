@@ -259,7 +259,9 @@ namespace Net
         socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
         socket.close(ec);
 
+        // 对变量置空
         sending = false;
+        queueBufLen = 0;
 
         // 防止多次通知关闭
         if (!closeNotified.exchange(true))
