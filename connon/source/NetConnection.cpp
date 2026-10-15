@@ -8,6 +8,8 @@
 #include "NetConnection.h"
 
 #include <cstring>
+#include <cstdint>
+#include <stdexcept>
 
 #include <boost/asio.hpp>
 

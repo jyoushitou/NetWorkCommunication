@@ -7,6 +7,8 @@
 #include <memory>
 #include <string>
 #include <deque>
+#include <atomic>
+#include <cstdint>
 
 #include <boost/asio.hpp>
 
@@ -197,12 +199,12 @@ namespace Net
         /// @note
         virtual void start();
 
+    protected:
         /// @brief      析构函数
         /// @details    采用默认析构
         /// @note
         virtual ~Connection() = default;
 
-    protected:
         /// @brief 更新时间
         /// @note 可以重写此函数实现时间的更新
         virtual void updateTime() {};
