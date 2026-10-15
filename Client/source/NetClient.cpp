@@ -1,6 +1,14 @@
+/// @file        NetClient.h
+/// @brief       网络通讯客户端远吗
+/// @author      jyoushitou
+/// @date        2026-09-16
+/// @copyright   Copyright (c) 2026
+
 #include "NetClient.h"
 
 #include <boost/asio.hpp>
+
+#include "Utils.h"
 
 namespace Net
 {

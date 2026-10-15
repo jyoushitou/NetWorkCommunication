@@ -1,3 +1,8 @@
+/// @file        NetClient.cpp
+/// @brief       网络通讯客户端头文件
+/// @author      jyoushitou
+/// @date        2026-09-16
+/// @copyright   Copyright (c) 2026
 #pragma once
 
 #include <string>
