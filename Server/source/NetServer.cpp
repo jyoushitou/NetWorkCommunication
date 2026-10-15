@@ -60,7 +60,7 @@ namespace Net
                 return;
             }
 
-            if (msg.c_str() == kCloseCommand)
+            if (msg == kCloseCommand)
             {
                 // 收到退出信号
                 // 关闭这次会话，最后析构交给Server的监控线程
