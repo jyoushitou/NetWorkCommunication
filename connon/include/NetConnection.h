@@ -296,6 +296,8 @@ namespace Net
         /// @note
         void readBody(unsigned long long msg_id, int msg_len);
 
+        std::atomic<bool> started = false;
+
         /// @brief      读取缓存
         /// @details    存储当前读取的接收节点
         /// @note

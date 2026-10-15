@@ -236,6 +236,10 @@ namespace Net
     /// @note
     void Connection::start()
     {
+        if (started.exchange(true))
+        {
+            return;
+        }
         // 启动读取函数
         readHead();
     }
