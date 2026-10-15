@@ -79,7 +79,7 @@ namespace Net
     /// @brief      获取缓存区指针
     /// @return     指向缓冲区首地址的指针
     /// @note
-    char* MsgNode::getBuf() const
+    char* MsgNode::getBuf()
     {
         return buf;
     }

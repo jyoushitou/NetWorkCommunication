@@ -85,7 +85,7 @@ namespace Net
         /// @return     指向缓冲区首地址的指针
         /// @warning    禁止释放或越界访问
         /// @note
-        char* getBuf() const;
+        char* getBuf();
 
         /// @brief      获取当前读取位置
         /// @return     当前读取位置
