@@ -556,16 +556,9 @@ namespace Net
             return false;
         }
 
-        // 判断发送对列是否有空余
-        if (msg.size() + queueBufLen > maxSendBufLen)
-        {
-            return false;
-        }
-
-        queueBufLen += msg.size();
-
         // 加入发送队列
         send(msg_id, msg);
+        return true;
     }
 
     /// @brief      发送消息到发送队列
@@ -619,6 +612,14 @@ namespace Net
 
                               // 外层 lambda 已在 IO 线程中执行，直接入队
                               sendQueue.push_back(send_node);
+
+                              // 判断发送对列是否有空余
+                              if (msg.size() + queueBufLen > maxSendBufLen)
+                              {
+                                  throw std::invalid_argument("发送错误，队列内存已满");
+                              }
+
+                              queueBufLen += msg.size();
 
                               updateTime();
 
@@ -694,6 +695,10 @@ namespace Net
                                      {
                                          queueBufLen -= send_node->getCurLen();
                                          sendQueue.pop_front();
+                                         if (queueBufLen < 0)
+                                         {
+                                             queueBufLen = 0;
+                                         }
                                      }
 
                                      // 判断队列是否为空
