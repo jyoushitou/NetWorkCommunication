@@ -11,30 +11,15 @@ namespace Net
         {
             //========== HttpSession ==========
 
-            // 安全获取自身 unique_ptr（重载返回 HttpSession 类型，避免 protected 访问问题）
-            std::shared_ptr<HttpSession> HttpSession::shared_from_this()
-            {
-                return std::static_pointer_cast<HttpSession>(Session::shared_from_this());
-            }
-
             HttpSession::HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                                     std::shared_ptr<VueCallBack> VueCallBackFunction)
-                : Net::Server::Session(io, std::move(sock))
+                                     std::shared_ptr<HandleFunction> HF, long long timeout, int maxSendBufLen)
+                : Net::Server::Session(io, std::move(sock), HF, timeout, maxSendBufLen)
             {
                 // 创建时立即记录活动时间，防止刚建好就被清理线程误删
-                UpdateActiveTime();
+                updateTime();
             }
 
-            // 更新最近活动时间
-            void HttpSession::UpdateActiveTime()
-            {
-                last_active_ms.store(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                         std::chrono::steady_clock::now().time_since_epoch())
-                                         .count(),
-                                     std::memory_order_relaxed);
-            }
-
-            void HttpSession::Start()
+            void HttpSession::start()
             {
                 // HTTP/1.1 默认 Keep-Alive：每个请求处理完后可能需要复用本连接继续读下一个请求，
                 // 这里把 parser_ 重置为初始状态（重新 make_unique，任何 Boost 版本都兼容）。

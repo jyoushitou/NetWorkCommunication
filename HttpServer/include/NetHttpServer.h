@@ -27,17 +27,13 @@ namespace Net
             {
             public:
                 HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                            std::shared_ptr<VueCallBack> VueCallBackFunction);
-
-                // 安全获取自身 unique_ptr（重载返回 HttpSession 类型，避免 protected 访问问题）
-                std::shared_ptr<HttpSession> shared_from_this();
+                            std::shared_ptr<HandleFunction> HF, long long timeout, int maxSendBufLen);
+                // 发送 HTTP 响应给前端（必须在 io_context 线程内调用）
+                void HttpSendResponse(const std::string& body);
 
                 // 重写 Start
                 // 不读二进制头，改为读 HTTP 请求
-                void Start() override;
-
-                // 发送 HTTP 响应给前端（必须在 io_context 线程内调用）
-                void HttpSendResponse(const std::string& body);
+                void start() override;
 
                 // 线程安全异步发送：任何线程均可调用，内部 post 到 HTTP io_context 线程执行
                 void AsyncSendResponse(const std::string& body);
@@ -61,8 +57,6 @@ namespace Net
                 void HandleRequest();
                 // 处理路由
                 void Router(const std::string method, std::string target);
-                // 更新最近活动时间
-                void UpdateActiveTime();
 
                 // 最近一次活动时间（steady_clock 秒）
                 std::atomic<long long> last_active_second{0};
