@@ -41,9 +41,6 @@ namespace Net
                 // 关闭连接
                 void Stop();
 
-                // 最后一次处理时间
-                long long LastActiveSecond();
-
                 // 是否在忙
                 bool busing();
 
@@ -63,12 +60,6 @@ namespace Net
 
                 // 判断是否在忙
                 bool busy = false;
-
-                // 回调函数
-                std::shared_ptr<VueCallBack> VueCallBackFunction = nullptr;
-
-                // 存储要发的头文件
-                common::header head;
             };
 
             // Http接收服务端
