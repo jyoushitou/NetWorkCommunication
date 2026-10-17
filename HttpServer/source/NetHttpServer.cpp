@@ -1,7 +1,19 @@
-// NetHttpServer.cpp
+/// @file        NetHttpServer.cpp
+/// @brief       HTTP 服务端实现（基于 Boost.Beast，只做报文收发，不含路由）
+/// @details     解析请求 → 交给业务回调 → 把回调返回的字符串当作响应体发回。
+///              方法、目标（含 query）、请求体全部原样交给业务层，本层不做任何分发。
+/// @author      jyoushitou
+/// @date        2026-09-16
+/// @copyright   Copyright (c) 2026
+
+// 头文件
 #include "NetHttpServer.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
+
+#include "Utils.h"
 
 namespace Net
 {
@@ -9,479 +21,616 @@ namespace Net
     {
         namespace HttpServer
         {
+            namespace
+            {
+                /// @brief 单条请求体的上限（字节）；超过回 413 并断开连接
+                constexpr std::uint64_t kMaxBodyBytes = 4ull * 1024 * 1024;
+
+                /// @brief 请求头上限（字节）；Beast 默认只有 8KB，带长 Cookie / JWT 时容易不够
+                constexpr std::uint32_t kMaxHeaderBytes = 16u * 1024;
+
+                /// @brief 空闲清理的巡检周期（秒）
+                constexpr long long kCleanupIntervalSeconds = 10;
+
+                /// @brief 新建会话的空闲超时（秒），给基类 timeOut() 用
+                /// @note  空闲清理走的是 last_active_ms + idle_timeout_ms，两套互不干扰
+                constexpr long long kSessionTimeoutSeconds = 60;
+
+                /// @brief 新建会话的发送队列上限（HTTP 不走基类二进制发送队列，给个常规值即可）
+                constexpr int kMaxSendBufLen = 1024 * 1024 * 10;
+
+                /// @brief 获取当前时间（steady_clock 毫秒）
+                /// @return 自开机以来的毫秒数
+                /// @note   只用于比较差值，绝对值没有意义
+                long long NowMs()
+                {
+                    return std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+                }
+
+                /// @brief 构造一个最小的 JSON 错误体
+                /// @param[in] msg 错误描述
+                /// @return 形如 {"code":1,"msg":"..."} 的字符串
+                /// @warning 业务回调返回空串表示「异步回包」，所以错误响应不能返回空串
+                /// @note
+                std::string ErrorBody(const char* msg)
+                {
+                    return std::string("{\"code\":1,\"msg\":\"") + msg + "\"}";
+                }
+
+            } // namespace
+
             //========== HttpSession ==========
 
+            /// @brief      构造函数
+            /// @details    接管 socket，并把空闲超时与发送上限交给基类；随后记一次活动时间
+            /// @note       HTTP 链路不走基类的二进制消息回调，所以 HF 传空
             HttpSession::HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                                      std::shared_ptr<HandleFunction> HF, long long timeout, int maxSendBufLen)
                 : Net::Server::Session(io, std::move(sock), HF, timeout, maxSendBufLen)
             {
-                // 创建时立即记录活动时间，防止刚建好就被清理线程误删
-                updateTime();
+                // 创建时立即记录活动时间，防止刚建好就被清理定时器误删
+                UpdateActiveTime();
             }
 
+            /// @brief      开始（或继续）读取下一条 HTTP 请求
+            /// @details    重建解析器 → 清空请求上下文 → 异步读请求头；
+            ///             读完头后按 parser 的状态决定是直接进业务还是继续读 body
+            /// @note       重写基类虚函数，不走基类「读 12 字节二进制头」的链路
             void HttpSession::start()
             {
-                // HTTP/1.1 默认 Keep-Alive：每个请求处理完后可能需要复用本连接继续读下一个请求，
-                // 这里把 parser_ 重置为初始状态（重新 make_unique，任何 Boost 版本都兼容）。
-                parser_ = std::make_unique<boost::beast::http::request_parser<boost::beast::http::string_body>>();
+                // HTTP/1.1 默认 Keep-Alive：每条请求处理完后可能要复用本连接继续读下一条，
+                // 这里把解析器重置为初始状态（重新 make_unique，任何 Boost 版本都兼容）
+                parser = std::make_unique<http::request_parser<http::string_body>>();
+                parser->body_limit(kMaxBodyBytes);      // 请求体上限，超了会得到 body_limit 错误
+                parser->header_limit(kMaxHeaderBytes);  // 请求头上限，超了会得到 header_limit 错误
 
-                // 清空 buffer_ 残留数据（如果上一次读取有剩余字节，会干扰下一次解析）
-                buffer_.consume(buffer_.size());
+                // 清空上一条请求的上下文
+                // ★ buffer 不能清：里面可能已经缓存了下一条请求的字节（HTTP pipelining）
+                url = Url{};
 
-                // 清空url，避免因为之前的url造成错误
-                url = {};
-
-                // 读请求前更新活动时间
+                // 新请求开始，先解除忙碌标记
+                busy.store(false, std::memory_order_relaxed);
                 UpdateActiveTime();
 
-                // 异步读取 HTTP 请求头
-                boost::beast::http::async_read_header(
-                    sock, buffer_, *parser_,
-                    [self = shared_from_this()](boost::system::error_code ec, std::size_t) mutable
+                // 保活：异步回调执行期间会话不能被析构
+                auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
+
+                // 两段式读取的第一段：只读到请求头结束，此时 body 还没有读
+                http::async_read_header(
+                    socket, buffer, *parser,
+                    [self](boost::system::error_code ec, std::size_t)
                     {
-                        // 客户端在等待下一个请求时断开连接（Keep-Alive 正常收尾），
-                        // 这是正常关闭，不是错误，不打印红色日志。
-                        if (ec == boost::beast::http::error::end_of_stream)
+                        // 对端在 keep-alive 空闲期正常关闭，不是错误
+                        if (ec == http::error::end_of_stream)
                         {
-                            Utils::Out::Out_Msg("Keep-Alive 等待期间客户端断开连接，正常关闭");
                             self->Stop();
                             return;
                         }
 
-                        // 检查读是否有错误
+                        // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
                         if (ec)
                         {
-                            Utils::Out::Out_Err("HTTP 连接读取错误：" + ec.what());
+                            Utils::Out::outErr("HTTP 读取请求头失败：" + ec.message());
                             self->Stop();
                             return;
                         }
 
-                        // 有请求活动，更新时间戳
+                        // 把请求头里的信息落到上下文里（业务层只认 Url）
+                        auto& req = self->parser->get();
+                        self->url.method = std::string(req.method_string());
+                        self->url.target = std::string(req.target());
+                        self->url.version = req.version();
+                        self->url.keep_alive = req.keep_alive();
                         self->UpdateActiveTime();
 
-                        // 取出已经解析好的 HTTP 请求对象
-                        auto& req = self->parser_->get();
-
-                        // 记录请求方是否要求 Keep-Alive（HTTP/1.1 默认 true）
-                        self->url.keep_alive = req.keep_alive();
-
-                        // 路由
-                        self->Router(std::string(req.method_string()), std::string(req.target()));
-
-                        // 根据 Content-Length 判断是否有 body
-                        auto it_cl = req.find(boost::beast::http::field::content_length);
-                        // 检查是不是在末尾或者字段为空
-                        if (it_cl != req.end() && !it_cl->value().empty())
-                        {
-                            // 防御性解析：Content-Length 非法时直接返回 400
-                            unsigned long long content_length = 0;
-                            try
-                            {
-                                content_length = std::stoull(std::string(it_cl->value()));
-                            }
-                            catch (const std::exception&)
-                            {
-                                self->HttpSendResponse("{\"code\":1,\"msg\":\"invalid Content-Length\"}");
-                                return;
-                            }
-
-                            if (content_length > 0)
-                            {
-                                self->ReadBody();
-                            }
-                            else
-                            {
-                                self->HandleRequest();
-                            }
-                        }
-                        else
+                        // 没有 body（GET、Content-Length: 0）→ 直接进业务
+                        if (self->parser->is_done())
                         {
                             self->HandleRequest();
+                            return;
                         }
+
+                        // 有 body（Content-Length > 0 或 Transfer-Encoding: chunked）→ 继续读
+                        self->ReadBody();
                     });
             }
 
-            // 读取消息体
+            /// @brief      读取消息体
+            /// @details    两段式读取的第二段：在同一个 parser 上续读，读完（含 chunked 解码）后进业务
+            /// @warning    判断「要不要读 body」必须用 parser->is_done()，不能用 Content-Length ——
+            ///             chunked 请求根本没有这个头
             void HttpSession::ReadBody()
             {
-                // 读取body
-                boost::beast::http::async_read(
-                    sock, buffer_, *parser_,
-                    [self = shared_from_this()](boost::system::error_code ec, std::size_t) mutable
+                UpdateActiveTime();
+                auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
+
+                http::async_read(
+                    socket, buffer, *parser,
+                    [self](boost::system::error_code ec, std::size_t)
                     {
-                        // 客户端在 body 未读完时断开连接（正常关闭），不是错误
-                        if (ec == boost::beast::http::error::end_of_stream)
+                        // 请求体超过 parser->body_limit()：剩余 body 还在流里，只能回 413 后断开
+                        if (ec == http::error::body_limit)
+                        {
+                            Utils::Out::outErr("HTTP 请求体超过上限，返回 413");
+                            self->httpReplay(R"({"code":413,"msg":"payload too large"})",
+                                             http::status::payload_too_large);
+                            return;
+                        }
+
+                        // 对端在发 body 的过程中正常关闭
+                        if (ec == http::error::end_of_stream)
                         {
                             self->Stop();
                             return;
                         }
 
-                        // 检查读是否有错误
                         if (ec)
                         {
-                            Utils::Out::Out_Msg("读取消息有错误，错误码：" + ec.what());
-                            // 出现错误，关闭连接
+                            Utils::Out::outErr("HTTP 读取请求体失败：" + ec.message());
                             self->Stop();
                             return;
                         }
 
-                        // body 读到了，更新活动时间
+                        // chunked 已由 Beast 解码，这里拿到的是完整明文
+                        self->url.body = self->parser->get().body();
                         self->UpdateActiveTime();
-
-                        // 取出已经解析好的 HTTP 请求对象
-                        auto& req = self->parser_->get();
-
-                        // 记录请求方是否要求 Keep-Alive
-                        self->url.keep_alive = req.keep_alive();
-
-                        // 读取到消息体
-                        self->url.body = req.body();
-
-                        // 调用回调函数
                         self->HandleRequest();
                     });
             }
 
-            // 处理请求（解析 body 并回复）
+            /// @brief      处理请求
+            /// @details    置忙标记后调用业务回调；返回值非空则立刻回包，
+            ///             为空则保持忙标记，等业务层异步回包
+            /// @warning    回调在 IO 线程内执行，业务里禁止阻塞
             void HttpSession::HandleRequest()
             {
-                // 标记忙碌：请求处理期间（包括异步等待微服务返回）不允许被清理线程关闭
+                // 标记忙碌：请求处理期间（包括等待业务异步回包）不允许被清理定时器关掉
                 busy.store(true, std::memory_order_relaxed);
-
-                // 更新时间
                 UpdateActiveTime();
 
-                // 调用 HttpServer 的处理函数（在这里解析 JSON，可能返回同步响应字符串）
-                std::string response = http_server->HandleVueRequest(shared_from_this(), url);
+                auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
+
+                std::string response;
+                try
+                {
+                    // 交给服务端统一分发：本层不做任何路由，方法/目标/请求体原样上抛
+                    if (http_server != nullptr)
+                        response = http_server->HandleVueRequest(self);
+                    else
+                        response = ErrorBody("http server not set");
+                }
+                catch (const std::exception& e)
+                {
+                    Utils::Out::outErr("HTTP 业务回调抛出异常：" + std::string(e.what()));
+                    response = ErrorBody("internal error");
+                }
+                catch (...)
+                {
+                    Utils::Out::outErr("HTTP 业务回调抛出未知异常");
+                    response = ErrorBody("internal error");
+                }
+
+                // 非空 = 同步回包
                 if (!response.empty())
                 {
-                    // 同步模式：直接发送响应（发送完成回调里会清除 busy）
-                    HttpSendResponse(response);
+                    httpReplay(response);
+                    return;
                 }
-                // 响应为空 → 异步模式：
-                // 不发送、不关闭连接，由 ClientWork 收到微服务结果后
-                // 通过同一个 session 调用 AsyncSendResponse(msg) 发送
-                // busy 保持 true，直到异步响应发送完成后才清除
+
+                // 空串 = 异步回包：这里什么都不发，busy 保持 true，
+                // 等业务层拿到结果后调用 AsyncSendResponse() 回包
             }
 
-            // 线程安全发送响应（任何线程均可调用，通过 post 投递到 HttpServer 的 io_context 线程执行）
-            void HttpSession::AsyncSendResponse(const std::string& body)
+            /// @brief      发送 HTTP 响应报文
+            /// @details    组报文 → 异步写 → 写完按 keep-alive 决定复用连接还是关闭
+            /// @param[in] body 响应体（非空）
+            /// @param[in] st 状态码
+            void HttpSession::httpReplay(const std::string& body, http::status st)
             {
-                auto self = shared_from_this();
-                boost::asio::post(ioc, [self, body]() mutable { self->HttpSendResponse(body); });
-            }
+                // 只有请求体读完才允许复用连接：提前拒绝（413）时流里还有未读数据，必须关
+                const bool keep = url.keep_alive && parser && parser->is_done();
 
-            // Http请求
-            void HttpSession::HttpSendResponse(const std::string& body)
-            {
-                // 保活
-                auto self = shared_from_this();
-
-                // ✅ 用 shared_ptr 管理响应对象，保证 async_write 异步写操作期间对象存活
-                auto res = std::make_shared<boost::beast::http::response<boost::beast::http::string_body>>(
-                    boost::beast::http::status::ok, 11);
+                // 报文对象必须活到写完成，用 shared_ptr 交给 lambda 持有；
+                // 版本回显请求的版本，HTTP/1.0 的客户端不认 1.1 的默认复用语义
+                auto res = std::make_shared<http::response<http::string_body>>(
+                    st, url.version ? url.version : 11);
 
                 // 构建报文
-                res->set(boost::beast::http::field::server, "CppHttpServer/1.0");
-                res->set(boost::beast::http::field::content_type, "application/json");
-                // 允许跨域
+                res->set(http::field::server, "CommonNetHttpServer");
+                res->set(http::field::content_type, "application/json; charset=utf-8");
+                // 允许跨域：前端（Vue / React）直连本服务时需要
                 res->set("Access-Control-Allow-Origin", "*");
+                res->set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+                res->set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+
                 // 消息体复制到发送里
                 res->body() = body;
 
-                // ✅ 使用类成员 url.keep_alive（请求解析时保存），而不是 res->keep_alive()（恒为 true）
-                bool keep_alive = url.keep_alive;
+                // 用 API 设置复用意愿：会按版本自动写/省略 Connection 头，不要手写
+                res->keep_alive(keep);
 
-                // ✅ 根据请求方是否要求 Keep-Alive 设置 Connection 头
-                if (keep_alive)
-                {
-                    res->set(boost::beast::http::field::connection, "keep-alive");
-                }
-                else
-                {
-                    res->set(boost::beast::http::field::connection, "close");
-                }
-
-                // 根据 body 的内容自动计算并设置 HTTP 报文的 `Content-Length` 头
+                // 根据 body 自动计算 Content-Length（必须在 body 赋值之后调用）
                 res->prepare_payload();
 
-                Utils::Out::Out_Msg("HttpSendResponse: keep_alive = " + std::string(keep_alive ? "true" : "false") +
-                                    ", Connection 头 = " + std::string(res->at(boost::beast::http::field::connection)));
+                UpdateActiveTime();
+                auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
 
-                boost::beast::http::async_write(
-                    sock, *res,
-                    [this, self, res, keep_alive](boost::system::error_code ec, std::size_t) mutable
+                http::async_write(
+                    socket, *res,
+                    [self, res](boost::system::error_code ec, std::size_t)
                     {
-                        // 请求处理完毕（无论成功/失败），清除忙碌标记
-                        busy.store(false, std::memory_order_relaxed);
-                        // 更新活动时间，防止发完响应后立刻被清理线程误杀
-                        UpdateActiveTime();
+                        // 无论成功还是失败，这条请求到这里都处理完了
+                        self->busy.store(false, std::memory_order_relaxed);
+                        self->UpdateActiveTime();
 
-                        // 判断是否有错误
                         if (ec)
                         {
-                            Utils::Out::Out_Err("HTTP 响应发送失败，错误码：" + ec.what());
-                            Stop();
+                            Utils::Out::outErr("HTTP 发送响应失败：" + ec.message());
+                            self->Stop();
                             return;
                         }
 
-                        Utils::Out::Out_Msg("HTTP 响应发送完成，keep_alive = " +
-                                            std::string(keep_alive ? "true" : "false"));
+                        // 报文里说了不复用（或客户端要求关闭）→ 关连接
+                        if (!res->keep_alive())
+                        {
+                            self->Stop();
+                            return;
+                        }
 
-                        // 发送成功：
-                        if (keep_alive)
-                        {
-                            // Keep-Alive：重置解析器后继续读取下一个 HTTP 请求
-                            Start();
-                        }
-                        else
-                        {
-                            // 客户端要求关闭连接
-                            Stop();
-                        }
+                        // 复用连接：继续读下一条请求
+                        self->start();
                     });
             }
 
-            // 停止函数
-            void HttpSession::Stop()
+            /// @brief      线程安全地回复响应
+            /// @details    任意线程均可调用，内部 post 到 IO 线程执行，避免跨线程碰 socket / parser
+            /// @param[in] body 响应体（空串会被忽略）
+            /// @warning    会话已关闭、或当前没有请求在等回包时，本次调用被丢弃
+            /// @note
+            void HttpSession::AsyncSendResponse(const std::string& body)
             {
-                // 继承自 Session::Stop()，通过 io_context 投递关闭操作
-                Net::Server::Session::Stop();
+                auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
 
-                // 从 HttpServer 的会话列表移除（如果是清理线程关闭的，也会走这里）
-                if (http_server)
-                    http_server->RemoveSession(shared_from_this());
+                boost::asio::post(ioc, [self, body]()
+                {
+                    // 空响应体没有意义，直接丢弃（约定了空串表示「异步」，不能拿来回空包）
+                    if (body.empty())
+                        return;
+
+                    // 会话已关闭（超时、对端断开）→ 丢弃
+                    if (self->isClosed())
+                        return;
+
+                    // 当前没有请求在等回包（同步模式已经回过了）→ 丢弃，避免重复响应
+                    if (!self->busy.load(std::memory_order_relaxed))
+                        return;
+
+                    self->httpReplay(body);
+                });
             }
 
-            // 路由
-            void HttpSession::Router(const std::string method, std::string target)
+            /// @brief 关闭连接
+            /// @details 走基类的优雅关闭，并把本会话从 HttpServer 的会话表里移除
+            void HttpSession::Stop()
             {
-                // 防御性检查：target 太短时 substr(pos) 会抛 out_of_range，必须拦截
-                if (target.size() < 5)
-                    return;
+                // 基类：置停止标志 + 优雅关闭（关 socket 时回调 derivedToClose）
+                closeSession();
 
-                // 路由到对应的服务器（保持原有判断语义：从下标 5 开始取 13 个字符比较 "articles"）
-                if (target.substr(5, 13) == "articles")
-                {
-                    url.head.set_serviceid(13);
+                // 从服务端会话表中摘掉自己；析构期间 http_server 会被置空，这里必须判空
+                if (http_server != nullptr)
+                    http_server->RemoveSession(std::static_pointer_cast<HttpSession>(shared_from_this()));
+            }
 
-                    // 有足够字符才做后续解析，避免 substr(14) 越界抛异常
-                    if (target.size() >= 14)
-                    {
-                        if (target.substr(14, target.size()) == "meta")
-                        {
-                            url.head.set_command(1);
-                        }
-                        else
-                        {
-                            url.head.set_command(2);
-                            url.body = target.substr(14, target.size());
-                        }
-                    }
-                    else
-                    {
-                        // 只有 /api/articles 或更短路径
-                        return;
-                    }
-                }
+            /// @brief      刷新活动时间
+            /// @details    同时刷新基类的 lastTime（供基类 timeOut()）与本类的 last_active_ms（供空闲清理）
+            void HttpSession::UpdateActiveTime()
+            {
+                updateTime();
+                last_active_ms.store(NowMs(), std::memory_order_relaxed);
             }
 
             //========== HttpServer ==========
 
-            // 构造函数
+            /// @brief      构造函数
+            /// @details    初始化 HTTP 监听器（open / reuse_address / bind / listen）
+            /// @param[in] io 存储 io_context
+            /// @param[in] ep 监听地址（只有地址部分生效，HTTP 端口由 http_port 决定）
+            /// @param[in] http_port_ HTTP 监听端口
             HttpServer::HttpServer(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
                                    unsigned short http_port_)
-                : Net::Server::Server(io, ep), http_acceptor(io), http_port(http_port_)
+                : Net::Server::Server(io,
+                                      // 基类构造时会 bind 这个端点，而本模块并不使用基类的 accept。
+                                      // 若它与 HTTP 端口相同就会抢占端口，这里改用临时端口（0）避开
+                                      (ep.port() == http_port_)
+                                          ? boost::asio::ip::tcp::endpoint{ep.address(), 0}
+                                          : ep,
+                                      nullptr)
+                , http_acceptor(io)
+                , cleanup_timer(io)
+                , http_port(http_port_)
             {
-                // 初始化 HTTP acceptor
-                boost::asio::ip::tcp::endpoint http_ep(boost::asio::ip::tcp::v4(), http_port);
+                boost::system::error_code ec;
+                const boost::asio::ip::tcp::endpoint http_ep(ep.address(), http_port);
 
-                // 用端点 `http_ep` 的协议（IPv4 或 IPv6）打开 acceptor。
-                http_acceptor.open(http_ep.protocol());
-                // 允许端口复用不会因为 TIME_WAIT 状态而报“Address already in use”
-                http_acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
-                // 把 acceptor 绑定到 `http_ep` 对应的 IP 和端口上
-                http_acceptor.bind(http_ep);
-                // 进入监听状态，内核开始接收连接请求。
-                http_acceptor.listen();
+                // 打开监听器（协议跟随 ep，IPv4 / IPv6 都支持）
+                http_acceptor.open(http_ep.protocol(), ec);
+                if (ec)
+                {
+                    Utils::Out::outErr("HTTP 监听器 open 失败：" + ec.message());
+                    return;
+                }
+
+                // 端口复用：进程重启时不会因为 TIME_WAIT 报「Address already in use」
+                http_acceptor.set_option(boost::asio::socket_base::reuse_address(true), ec);
+                if (ec)
+                {
+                    Utils::Out::outErr("HTTP 监听器设置 SO_REUSEADDR 失败：" + ec.message());
+                    return;
+                }
+
+                http_acceptor.bind(http_ep, ec);
+                if (ec)
+                {
+                    Utils::Out::outErr("HTTP 监听器 bind 失败：" + ec.message());
+                    return;
+                }
+
+                http_acceptor.listen(boost::asio::socket_base::max_listen_connections, ec);
+                if (ec)
+                {
+                    Utils::Out::outErr("HTTP 监听器 listen 失败：" + ec.message());
+                    return;
+                }
             }
 
-            // 启动连接Http
+            /// @brief      析构函数
+            /// @details    停止接收、关闭监听器与清理定时器，并通知所有会话关闭
+            /// @warning    这里直接做同步清理，不调用 Stop()：Stop() 内部用 shared_from_this()
+            ///             保活，而析构阶段已经不存在有效的 shared_ptr
+            HttpServer::~HttpServer()
+            {
+                http_running.store(false);
+
+                // 关监听器与定时器：挂起的 accept / 定时回调会以 operation_aborted 回来
+                boost::system::error_code ignored;
+                http_acceptor.close(ignored);
+                cleanup_timer.cancel(ignored);
+
+                for (auto& session : http_sessions)
+                {
+                    if (!session)
+                        continue;
+
+                    // 先断开反向引用，否则会话的 Stop() 会回调 RemoveSession(shared_from_this())
+                    session->http_server = nullptr;
+                    session->Stop();
+                }
+                http_sessions.clear();
+            }
+
+            /// @brief      注册回调函数
+            /// @param[in] cb 业务回调
+            void HttpServer::SetVueCallBack(VueCallBack cb)
+            {
+                VueCallBackFunction = std::make_shared<VueCallBack>(std::move(cb));
+            }
+
+            /// @brief 设置空闲超时
+            /// @param[in] idle_timeout_ms 空闲多少毫秒后关闭会话
+            void HttpServer::SetIdleTimeout(long long idle_timeout_ms)
+            {
+                this->idle_timeout_ms = (idle_timeout_ms > 0) ? idle_timeout_ms : 60000;
+            }
+
+            /// @brief      开始接受 HTTP 连接
+            /// @details    启动 accept 循环与空闲清理定时器；重复调用只有第一次生效
             void HttpServer::StartHttpAccept()
             {
-                // 保活
-                auto self = shared_from_this();
+                // 只允许启动一次
+                bool expected = false;
+                if (!http_running.compare_exchange_strong(expected, true))
+                {
+                    Utils::Out::outMsg("HTTP 服务已经在接收连接");
+                    return;
+                }
 
-                // 创建连接socket
-                auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
+                // 构造时 bind / listen 失败，这里就没有监听器可用
+                if (!http_acceptor.is_open())
+                {
+                    Utils::Out::outErr("HTTP 监听器未打开，无法接收连接");
+                    http_running.store(false);
+                    return;
+                }
 
-                // 连接
-                http_acceptor.async_accept(*sock,
-                                           [this, self, sock](boost::system::error_code ec)
-                                           {
-                                               // 是否已经在运行状态
-                                               if (!running)
-                                               {
-                                                   Utils::Out::Out_Msg("已经有连接的Session");
-                                                   return;
-                                               }
+                // 弱引用供 accept / 定时器回调保活；要求调用方已用 shared_ptr 持有本对象
+                selfWeak = std::static_pointer_cast<HttpServer>(shared_from_this());
 
-                                               if (!ec)
-                                               {
+                Utils::Out::outMsg("HTTP 服务开始监听，端口：" + std::to_string(http_port));
 
-                                                   Utils::Out::Out_Msg("开始创建连接");
-
-                                                   // 创建 HTTP 会话
-                                                   auto session =
-                                                       std::make_shared<HttpSession>(ioc, std::move(*sock), this);
-
-                                                   // 放入Session队列
-                                                   http_sessions.push_back(session);
-
-                                                   // 启动Session
-                                                   session->Start();
-
-                                                   // 继续接收下一个连接
-                                                   StartHttpAccept();
-                                               }
-                                               else
-                                               {
-                                                   Utils::Out::Out_Err("HTTP accept 错误: " + ec.what());
-                                               }
-                                           });
+                doAccept();
+                StartCleanupTimer();
             }
 
-            // 关闭函数
-            void HttpServer::Stop()
+            /// @brief      发起一次异步 accept
+            /// @details    成功则创建会话、放进会话表并启动读循环；无论成败都会续接下一次 accept
+            void HttpServer::doAccept()
             {
-                // 先关掉 HTTP acceptor
-                boost::asio::post(ioc,
-                                  [this, self = shared_from_this()]()
-                                  {
-                                      // 关闭 HTTP acceptor
-                                      boost::system::error_code ec;
-                                      http_acceptor.close(ec);
+                auto self = selfWeak.lock();
+                if (!self || !http_running.load())
+                    return;
 
-                                      // 一次轮询关闭Session连接
-                                      for (auto& s : http_sessions)
-                                          s->Stop();
+                http_acceptor.async_accept(
+                    [this, self](boost::system::error_code ec, boost::asio::ip::tcp::socket socket)
+                    {
+                        if (!http_running.load())
+                            return;
 
-                                      // 清空http_Session连接
-                                      http_sessions.clear();
-                                  });
+                        if (ec)
+                        {
+                            // 服务器主动关闭监听器时会有 operation_aborted，属于正常退出流程
+                            if (ec != boost::asio::error::operation_aborted)
+                                Utils::Out::outErr("HTTP accept 失败：" + ec.message());
+                        }
+                        else
+                        {
+                            // 关闭 Nagle：HTTP 都是小包交互，减少延迟
+                            boost::system::error_code ignore;
+                            socket.set_option(boost::asio::ip::tcp::no_delay(true), ignore);
 
-                // 调用基类 Stop（关 TCP acceptor + 唤醒消息队列）
-                Net::Server::Server::Stop();
+                            // 创建 HTTP 会话：socket 交给会话，会话通过 http_server 回调本对象
+                            auto session = std::make_shared<HttpSession>(
+                                ioc, std::move(socket), nullptr, kSessionTimeoutSeconds, kMaxSendBufLen);
+                            session->http_server = this;
+
+                            http_sessions.push_back(session);
+                            session->start();
+                        }
+
+                        // ★ 无论本次成功还是失败都要续接，
+                        //   否则一次 accept 失败之后就再也不能接受新连接了
+                        if (http_running.load())
+                            doAccept();
+                    });
             }
 
-            // 移除并关闭指定会话（io_context 线程内调用）
-            void HttpServer::RemoveSession(std::shared_ptr<HttpSession> session)
+            /// @brief      安排下一次空闲会话清理
+            /// @details    用定时器在 IO 线程内周期触发，不需要额外的轮询线程
+            void HttpServer::StartCleanupTimer()
             {
-                // 通过 post 投递到 io_context 线程执行，避免跨线程改 vector
-                auto self = shared_from_this();
-                boost::asio::post(ioc,
-                                  [this, self, session]() mutable
-                                  {
-                                      // 从 vector 中查找并移除
-                                      auto it = std::find(http_sessions.begin(), http_sessions.end(), session);
-                                      if (it != http_sessions.end())
-                                      {
-                                          Utils::Out::Out_Msg("移除空闲/断开 HTTP Session");
-                                          http_sessions.erase(it);
-                                      }
-                                  });
+                auto self = selfWeak.lock();
+                if (!self || !http_running.load())
+                    return;
+
+                cleanup_timer.expires_after(std::chrono::seconds(kCleanupIntervalSeconds));
+                cleanup_timer.async_wait(
+                    [this, self](boost::system::error_code ec)
+                    {
+                        // operation_aborted = 服务器停止时取消了定时器，正常退出
+                        if (ec || !http_running.load())
+                            return;
+
+                        CleanupIdleSessions(idle_timeout_ms);
+                        StartCleanupTimer();
+                    });
             }
 
-            // 清理空闲超时的 HTTP 会话
-            // 清理线程每隔一段时间调用；内部通过 post 投递到 io_context 线程执行真正的清理
+            /// @brief      清理空闲超时的 HTTP 会话
+            /// @details    遍历会话表：已关闭的直接移出；空闲超时且不在等业务回包的主动关闭
+            /// @param[in] idle_timeout_ms 空闲多少毫秒算超时
+            /// @warning    正在等业务异步回包（busy）的会话不在这里杀，
+            ///             避免把慢业务的结果打断（业务层需自己保证最终回包）
+            /// @note       线程安全：内部 post 到 IO 线程执行
             void HttpServer::CleanupIdleSessions(long long idle_timeout_ms)
             {
-                auto self = shared_from_this();
-                boost::asio::post(ioc,
-                                  [this, self, idle_timeout_ms]() mutable
-                                  {
-                                      long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                             std::chrono::steady_clock::now().time_since_epoch())
-                                                             .count();
+                auto self = std::static_pointer_cast<HttpServer>(shared_from_this());
 
-                                      size_t before = http_sessions.size();
-                                      size_t removed = 0;
-
-                                      // 遍历并清理：超时 + 非忙碌 的会话
-                                      for (auto it = http_sessions.begin(); it != http_sessions.end();)
-                                      {
-                                          auto& s = *it;
-                                          // 正在处理请求（如等待微服务返回）的会话不清理
-                                          if (s->busy.load(std::memory_order_relaxed))
-                                          {
-                                              ++it;
-                                              continue;
-                                          }
-
-                                          long long last = s->last_active_ms.load(std::memory_order_relaxed);
-                                          if (now_ms - last > idle_timeout_ms)
-                                          {
-                                              Utils::Out::Out_Msg("清理空闲超时 HTTP Session，空闲时长 = " +
-                                                                  std::to_string(now_ms - last) + " ms");
-                                              s->Stop();
-                                              it = http_sessions.erase(it);
-                                              ++removed;
-                                          }
-                                          else
-                                          {
-                                              ++it;
-                                          }
-                                      }
-
-                                      if (removed > 0)
-                                      {
-                                          Utils::Out::Out_Msg("清理 HTTP 会话完成：清理前 = " + std::to_string(before) +
-                                                              ", 清理 = " + std::to_string(removed) +
-                                                              ", 剩余 = " + std::to_string(http_sessions.size()));
-                                      }
-                                  });
-            }
-
-            // 注册回调函数
-            void HttpServer::SetHandleVueRequestCallback(VueRequestCallback cb)
-            {
-                handle_vue_cb = std::move(cb);
-            }
-
-            // 回调函数过去
-            std::string HttpServer::HandleVueRequest(std::shared_ptr<HttpSession> session,
-                                                     Net::Server::HttpServer::Url url)
-            {
-                // 尝试按 JSON 解析（兼容 {"cmd":"xxx"} 的格式）
-                try
+                boost::asio::post(ioc, [this, self, idle_timeout_ms]()
                 {
-                    boost::json::value v = boost::json::parse(url.body);
-                    if (v.is_object() && v.as_object().contains("cmd") && v.as_object()["cmd"].is_string())
+                    const long long now_ms = NowMs();
+
+                    for (auto it = http_sessions.begin(); it != http_sessions.end();)
                     {
-                        // 前端发的是 {"cmd":"GetUser"} → 提取 "GetUser"
-                        if (v.as_object()["cmd"].as_string() == "GetUser")
+                        auto& session = *it;
+                        if (!session)
                         {
-                            url.head.set_command(1);
-                            url.body = "";
+                            it = http_sessions.erase(it);
+                            continue;
                         }
+
+                        // 已经关闭的会话：直接移出会话表（socket 由会话自己负责关闭）
+                        if (session->isClosed())
+                        {
+                            it = http_sessions.erase(it);
+                            continue;
+                        }
+
+                        // 空闲超时且没在等业务回包 → 主动关闭（Stop 会把自己从表里摘掉）
+                        if (!session->busing() &&
+                            now_ms - session->last_active_ms.load(std::memory_order_relaxed) > idle_timeout_ms)
+                        {
+                            Utils::Out::outMsg("清理空闲超时的 HTTP 会话");
+                            session->Stop();
+                        }
+                        ++it;
                     }
-                    else
-                    {
-                        // 是 JSON 但没有 cmd 字段，直接返回错误
-                        return "{\"code\":1,\"msg\":\"missing cmd field\"}";
-                    }
-                }
-                catch (const std::exception&)
+                });
+            }
+
+            /// @brief      处理一次请求（业务分发入口）
+            /// @details    本层不做任何路由：直接把请求上下文交给业务回调，回调返回什么就回什么
+            /// @param[in] session 当前会话
+            /// @return 响应体；空串表示业务层要异步回包
+            std::string HttpServer::HandleVueRequest(const std::shared_ptr<HttpSession>& session)
+            {
+                // 回调没注册就回错误（属于配置问题，不能返回空串，否则会被当成「异步回包」）
+                if (!VueCallBackFunction || !(*VueCallBackFunction))
                 {
-                    // 解析失败 → 说明前端发的是裸字符串，body 原样保留，直接透传给业务层
-                    return "{\"code\":3,\"msg\":\"recivcemsg error\"}";
+                    Utils::Out::outErr("未设置 HTTP 业务回调函数！");
+                    return R"({"code":2,"msg":"business callback not set"})";
                 }
 
-                //  把解析后的 url 传给业务层
-                if (handle_vue_cb)
-                    return handle_vue_cb(session, url);
+                // 把请求原样交给业务层：方法、目标、请求体都在 session->url 里
+                return (*VueCallBackFunction)(session, session->url);
+            }
 
-                return "{\"code\":2,\"msg\":\"business callback not set\"}";
+            /// @brief      移除并关闭指定会话
+            /// @details    从会话表中摘除（内部 post 到 IO 线程，避免跨线程改 vector）
+            /// @param[in] session 待移除的会话
+            void HttpServer::RemoveSession(const std::shared_ptr<HttpSession>& session)
+            {
+                auto self = std::static_pointer_cast<HttpServer>(shared_from_this());
+
+                boost::asio::post(ioc, [this, self, session]()
+                {
+                    auto it = std::find(http_sessions.begin(), http_sessions.end(), session);
+                    if (it != http_sessions.end())
+                    {
+                        Utils::Out::outMsg("移除 HTTP Session");
+                        http_sessions.erase(it);
+                    }
+                });
+            }
+
+            /// @brief      停止服务
+            /// @details    置停止标志、关闭监听器与定时器、通知所有会话关闭
+            /// @warning    线程安全：关闭动作 post 到 IO 线程执行
+            void HttpServer::Stop()
+            {
+                http_running.store(false);
+
+                auto self = selfWeak.lock();
+                if (!self)
+                {
+                    // 从未启动过：没有挂起的异步操作，直接关掉监听器与定时器即可
+                    boost::system::error_code ignored;
+                    http_acceptor.close(ignored);
+                    cleanup_timer.cancel(ignored);
+                    return;
+                }
+
+                // 保活投递：确保关闭动作在 IO 线程内执行
+                boost::asio::post(ioc, [this, self]()
+                {
+                    boost::system::error_code ec;
+                    http_acceptor.close(ec);
+                    cleanup_timer.cancel(ec);
+
+                    for (auto& session : http_sessions)
+                    {
+                        if (!session)
+                            continue;
+
+                        // 先断开反向引用，避免会话的 Stop() 在关闭过程中再回调本对象
+                        session->http_server = nullptr;
+                        session->Stop();
+                    }
+                    http_sessions.clear();
+                });
+
+                // 顺带把基类的 accept / 监控线程收掉（未启动时基类内部会直接返回）
+                Net::Server::Server::Stop();
             }
         } // namespace HttpServer
     } // namespace Server

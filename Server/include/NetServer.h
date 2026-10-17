@@ -66,6 +66,8 @@ namespace Net
             Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock, std::shared_ptr<HandleFunction> HF,
                     long long timeout, int maxSendBufLen);
 
+            ~Session() override = default;
+
             /// @brief      回复消息
             /// @details    线程安全的发送入口（内部 post 到 IO 线程），向该客户端回复一条消息
             /// @param[in] msg_id 消息全局唯一ID
