@@ -291,9 +291,9 @@ namespace Net
             /// @param[in] body 响应体（空串会被忽略）
             /// @warning    会话已关闭、或当前没有请求在等回包时，本次调用被丢弃
             /// @note
-            void HttpSession::AsyncSendResponse(const std::string& body)
+            void HttpSession::httpAsyncReplay(const std::string& body)
             {
-                auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
+                auto self = getSession();
 
                 boost::asio::post(ioc,
                                   [self, body]()
