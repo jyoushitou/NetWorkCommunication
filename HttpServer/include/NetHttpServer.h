@@ -94,7 +94,8 @@ namespace Net
                 ///             shared_from_this() 会抛 std::bad_weak_ptr
                 /// @note
                 HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                            std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen);
+                            std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen,
+                            int maxHttpSendBufLen);
 
                 /// @brief      开始（或继续）读取下一条 HTTP 请求
                 /// @details    重建解析器 → 清空请求上下文 → 异步读请求头；
@@ -136,9 +137,6 @@ namespace Net
                 /// @note   供空闲清理判断，避免误杀正在等业务回包的会话
                 bool busing() const;
 
-                /// @brief 最近一次活动时间（steady_clock 毫秒）
-                std::atomic<long long> last_active_ms{0};
-
                 /// @brief      处理请求
                 /// @details    置忙标记后调用业务回调；返回值非空则立刻回包，
                 ///             为空则保持忙标记，等业务层异步回包
@@ -153,6 +151,8 @@ namespace Net
                 /// @note       仅 IO 线程内调用
                 void readBody();
 
+                /// @brief 获得自身指针
+                /// @return 返回自己的共享指针
                 std::shared_ptr<HttpSession> getSession();
 
                 /// @brief 请求解析器（每条请求重建，避免上一条请求的状态残留）
@@ -165,9 +165,13 @@ namespace Net
                 std::atomic<bool> busy = false;
 
                 /// @brief 当前请求的上下文（业务层只读）
-                Url url;
+                Url url = Url{};
 
-                std::unique_ptr<HttpHandleFunction> HHF = nullptr;
+                /// @brief 业务回调
+                std::shared_ptr<HttpHandleFunction> HHF = nullptr;
+
+                /// @brief 最大的发送体积
+                int maxHttpSendBufLen = 0;
             };
 
             /// @brief      HTTP 接收服务端
@@ -188,7 +192,8 @@ namespace Net
                 /// @param[in] http_port_ HTTP 监听端口
                 /// @warning    bind/listen 失败只打印错误日志，此时 StartHttpAccept() 不会开始 accept
                 /// @note
-                HttpServer(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, unsigned short http_port_);
+                HttpServer(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, unsigned short http_port,
+                           HttpHandleFunction HHF);
 
                 /// @brief 析构函数
                 /// @details 停止接收、关闭监听器与清理定时器，并通知全部会话关闭
@@ -275,14 +280,14 @@ namespace Net
                 /// @brief HTTP 会话集合（仅在 IO 线程内读写）
                 std::vector<std::shared_ptr<HttpSession>> http_sessions;
 
-                /// @brief 存储回调函数
-                std::shared_ptr<VueCallBack> VueCallBackFunction;
-
                 /// @brief 自身弱引用（供 accept / 定时器回调安全保活）
                 std::weak_ptr<HttpServer> selfWeak;
 
                 /// @brief 空闲超时（毫秒），由 SetIdleTimeout 修改
                 long long idle_timeout_ms = 60000;
+
+                /// @brief 存储http的回调
+                std::shared_ptr<HttpHandleFunction> HHF = nullptr;
             };
         } // namespace HttpServer
     } // namespace Server

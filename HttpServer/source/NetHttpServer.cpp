@@ -23,32 +23,6 @@ namespace Net
         {
             namespace
             {
-                /// @brief 单条请求体的上限（字节）；超过回 413 并断开连接
-                constexpr std::uint64_t kMaxBodyBytes = 4ull * 1024 * 1024;
-
-                /// @brief 请求头上限（字节）；Beast 默认只有 8KB，带长 Cookie / JWT 时容易不够
-                constexpr std::uint32_t kMaxHeaderBytes = 16u * 1024;
-
-                /// @brief 空闲清理的巡检周期（秒）
-                constexpr long long kCleanupIntervalSeconds = 10;
-
-                /// @brief 新建会话的空闲超时（秒），给基类 timeOut() 用
-                /// @note  空闲清理走的是 last_active_ms + idle_timeout_ms，两套互不干扰
-                constexpr long long kSessionTimeoutSeconds = 60;
-
-                /// @brief 新建会话的发送队列上限（HTTP 不走基类二进制发送队列，给个常规值即可）
-                constexpr int kMaxSendBufLen = 1024 * 1024 * 10;
-
-                /// @brief 获取当前时间（steady_clock 毫秒）
-                /// @return 自开机以来的毫秒数
-                /// @note   只用于比较差值，绝对值没有意义
-                long long NowMs()
-                {
-                    return std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::steady_clock::now().time_since_epoch())
-                        .count();
-                }
-
                 /// @brief 构造一个最小的 JSON 错误体
                 /// @param[in] msg 错误描述
                 /// @return 形如 {"code":1,"msg":"..."} 的字符串
@@ -67,11 +41,14 @@ namespace Net
             /// @details    接管 socket，并把空闲超时与发送上限交给基类；随后记一次活动时间
             /// @note       HTTP 链路不走基类的二进制消息回调，所以 HF 传空
             HttpSession::HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                                     std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen)
+                                     std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen,
+                                     int maxHttpSendBufLen)
                 : Net::Server::Session(io, std::move(sock), nullptr, timeout, maxSendBufLen)
             {
                 // 创建时立即记录活动时间，防止刚建好就被清理定时器误删
                 updateTime();
+
+                this->maxHttpSendBufLen = maxSendBufLen;
             }
 
             /// @brief      开始（或继续）读取下一条 HTTP 请求
@@ -82,9 +59,9 @@ namespace Net
             {
                 // HTTP/1.1 默认 Keep-Alive：每条请求处理完后可能要复用本连接继续读下一条，
                 // 这里把解析器重置为初始状态（重新 make_unique，任何 Boost 版本都兼容）
-                parser = std::make_unique<http::request_parser<http::string_body>>();
-                parser->body_limit(kMaxBodyBytes);     // 请求体上限，超了会得到 body_limit 错误
-                parser->header_limit(kMaxHeaderBytes); // 请求头上限，超了会得到 header_limit 错误
+                parser = std::make_unique<boost::beast::http::request_parser<boost::beast::http::string_body>>();
+                parser->body_limit(maxHttpSendBufLen);   // 请求体上限，超了会得到 body_limit 错误
+                parser->header_limit(maxHttpSendBufLen); // 请求头上限，超了会得到 header_limit 错误
 
                 // 清空上一条请求的上下文
                 // buffer 不能清：里面可能已经缓存了下一条请求的字节（HTTP pipelining）
@@ -157,16 +134,16 @@ namespace Net
                                                {
                                                    // 请求体超过 parser->body_limit()：剩余 body 还在流里，只能回 413
                                                    // 后断开
-                                                   if (ec == http::error::body_limit)
+                                                   if (ec == boost::beast::http::error::body_limit)
                                                    {
                                                        Utils::Out::outErr("HTTP 请求体超过上限，返回 413");
                                                        self->httpReplay(R"({"code":413,"msg":"payload too large"})",
-                                                                        http::status::payload_too_large);
+                                                                        boost::beast::http::status::payload_too_large);
                                                        return;
                                                    }
 
                                                    // 对端在发 body 的过程中正常关闭
-                                                   if (ec == http::error::end_of_stream)
+                                                   if (ec == boost::beast::http::error::end_of_stream)
                                                    {
                                                        self->closeSession();
                                                        return;
@@ -320,6 +297,11 @@ namespace Net
             bool HttpSession::busing() const
             {
                 return busy.load(std::memory_order_relaxed);
+            }
+
+            std::shared_ptr<HttpSession> HttpSession::getSession()
+            {
+                return std::static_pointer_cast<HttpSession>(shared_from_this());
             }
 
             /// @brief 关闭连接
