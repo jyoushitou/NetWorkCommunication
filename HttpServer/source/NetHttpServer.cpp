@@ -333,14 +333,6 @@ namespace Net
                     http_server->RemoveSession(std::static_pointer_cast<HttpSession>(shared_from_this()));
             }
 
-            /// @brief      刷新活动时间
-            /// @details    同时刷新基类的 lastTime（供基类 timeOut()）与本类的 last_active_ms（供空闲清理）
-            void HttpSession::UpdateActiveTime()
-            {
-                updateTime();
-                last_active_ms.store(NowMs(), std::memory_order_relaxed);
-            }
-
             //========== HttpServer ==========
 
             /// @brief      构造函数
