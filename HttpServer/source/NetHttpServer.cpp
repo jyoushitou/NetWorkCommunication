@@ -230,18 +230,19 @@ namespace Net
             /// @details    组报文 → 异步写 → 写完按 keep-alive 决定复用连接还是关闭
             /// @param[in] body 响应体（非空）
             /// @param[in] st 状态码
-            void HttpSession::httpReplay(const std::string& body, http::status st)
+            void HttpSession::httpReplay(const std::string& body, boost::beast::http::status st)
             {
                 // 只有请求体读完才允许复用连接：提前拒绝（413）时流里还有未读数据，必须关
                 const bool keep = url.keep_alive && parser && parser->is_done();
 
                 // 报文对象必须活到写完成，用 shared_ptr 交给 lambda 持有；
                 // 版本回显请求的版本，HTTP/1.0 的客户端不认 1.1 的默认复用语义
-                auto res = std::make_shared<http::response<http::string_body>>(st, url.version ? url.version : 11);
+                auto res = std::make_shared<boost::beast::http::response<boost::beast::http::string_body>>(
+                    st, url.version ? url.version : 11);
 
                 // 构建报文
-                res->set(http::field::server, "CommonNetHttpServer");
-                res->set(http::field::content_type, "application/json; charset=utf-8");
+                res->set(boost::beast::http::field::server, "CommonNetHttpServer");
+                res->set(boost::beast::http::field::content_type, "application/json; charset=utf-8");
                 // 允许跨域：前端（Vue / React）直连本服务时需要
                 res->set("Access-Control-Allow-Origin", "*");
                 res->set("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -256,7 +257,7 @@ namespace Net
                 // 根据 body 自动计算 Content-Length（必须在 body 赋值之后调用）
                 res->prepare_payload();
 
-                UpdateActiveTime();
+                updateTime();
                 auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
 
                 http::async_write(socket, *res,
@@ -264,19 +265,19 @@ namespace Net
                                   {
                                       // 无论成功还是失败，这条请求到这里都处理完了
                                       self->busy.store(false, std::memory_order_relaxed);
-                                      self->UpdateActiveTime();
+                                      self->updateTime();
 
                                       if (ec)
                                       {
                                           Utils::Out::outErr("HTTP 发送响应失败：" + ec.message());
-                                          self->Stop();
+                                          self->errCloseSession();
                                           return;
                                       }
 
                                       // 报文里说了不复用（或客户端要求关闭）→ 关连接
                                       if (!res->keep_alive())
                                       {
-                                          self->Stop();
+                                          self->closeSession();
                                           return;
                                       }
 
