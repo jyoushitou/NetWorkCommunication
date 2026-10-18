@@ -96,10 +96,6 @@ namespace Net
             bool timeOut();
 
         protected:
-            // 将tosend函数降级为保护
-            // 发送消息使用reply
-            using Connection::toSend;
-
             /// @brief      业务处理
             /// @details    收到消息后的具体业务实现，由基类回调触发：内容为 kCloseCommand 时关闭会话，
             ///             否则转交 HF 处理（HF 为空时也关闭会话）
@@ -107,7 +103,7 @@ namespace Net
             /// @param[in] msg 消息序列化字符串
             /// @warning    禁止在回调内部长时间阻塞，会阻塞asio事件循环
             /// @note
-            void recvToWork(const unsigned long long msg_id, std::string msg) override;
+            void recvToWork(const unsigned long long msg_id, std::string msg);
 
             /// @brief      更新连接时间
             /// @details    刷新 lastTime，供超时巡检使用，避免空闲连接长期占线
@@ -120,6 +116,11 @@ namespace Net
             /// @note 由基类 socketClose() 保证只回调一次
             void derivedToClose() override;
 
+        private:
+            // 将tosend函数降级为保护
+            // 发送消息使用reply
+            using Connection::toSend;
+
             /// @brief      获取自身的指针
             /// @details    把 shared_from_this() 向下转型为 Session 的 shared_ptr，供回调向外传递
             /// @return     Session 的 shared_ptr（static_pointer_cast 不做运行时校验，正常不会为空）
@@ -130,19 +131,19 @@ namespace Net
             /// @details 用于收到消息的具体消息处理（在 IO 线程内调用）
             std::shared_ptr<HandleFunction> HF = nullptr;
 
-            /// @brief 停止标志
-            /// @details 标识该会话是否已被请求关闭（由 closeSession 置位）
-            /// @note
-            std::atomic<bool> stop = false;
+            /// @brief 记录超时时间
+            /// @details 会话空闲超时时间，单位秒（构造函数传入，0 时回退为 60）
+            long long timeout = 60;
 
             /// @brief 最后更新时间
             /// @details 记录最后一次读写活动的时间戳（秒），timeOut() 依据它判断空闲超时
             /// @note
             std::atomic<time_t> lastTime;
 
-            /// @brief 记录超时时间
-            /// @details 会话空闲超时时间，单位秒（构造函数传入，0 时回退为 60）
-            long long timeout = 60;
+            /// @brief 停止标志
+            /// @details 标识该会话是否已被请求关闭（由 closeSession 置位）
+            /// @note
+            std::atomic<bool> stop = false;
         };
 
         /// @brief      服务器端
@@ -181,7 +182,7 @@ namespace Net
             /// @details    置 running=false 并 notify_all 唤醒监控线程，再 post 到 IO 线程关闭 acceptor、逐个关闭会话
             /// @warning    调用后服务器不再接受新连接，须重新构造使用
             /// @note       幂等，可重复调用
-            virtual void Stop();
+            void Stop();
 
         protected:
             /// @brief      所属的 io_context

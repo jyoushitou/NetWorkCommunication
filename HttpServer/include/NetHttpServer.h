@@ -94,7 +94,7 @@ namespace Net
                 ///             shared_from_this() 会抛 std::bad_weak_ptr
                 /// @note
                 HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                            std::shared_ptr<HandleFunction> HF, long long timeout, int maxSendBufLen);
+                            std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen);
 
                 /// @brief      开始（或继续）读取下一条 HTTP 请求
                 /// @details    重建解析器 → 清空请求上下文 → 异步读请求头；
@@ -119,11 +119,17 @@ namespace Net
                 /// @note
                 void httpAsyncReplay(const std::string& body);
 
-                /// @brief 关闭连接
+                /// @brief 正常的关闭连接
                 /// @details 走基类的优雅关闭，并把本会话从 HttpServer 的会话表里移除
                 /// @warning 线程安全（内部 post 到 IO 线程）
                 /// @note
                 void closeSession() override;
+
+                /// @brief 错误的关闭连接
+                /// @details 走基类的优雅关闭，并把本会话从 HttpServer 的会话表里移除
+                /// @warning 线程安全（内部 post 到 IO 线程）
+                /// @note
+                void errCloseSession();
 
                 /// @brief  是否在忙（正在处理请求，含等待业务异步回包）
                 /// @return 忙返回 true
@@ -143,7 +149,7 @@ namespace Net
                 /// @details    置忙标记后调用业务回调；返回值非空则立刻回包，
                 ///             为空则保持忙标记，等业务层异步回包
                 /// @note       仅 IO 线程内调用
-                void HandleRequest();
+                void handleToWork();
 
             private:
                 /// @brief      读取请求体
@@ -151,7 +157,9 @@ namespace Net
                 /// @warning    判断「要不要读 body」必须用 parser->is_done()，不能用 Content-Length ——
                 ///             chunked 请求根本没有这个头
                 /// @note       仅 IO 线程内调用
-                void ReadBody();
+                void readBody();
+
+                std::shared_ptr<HttpSession> getSession();
 
                 /// @brief 请求解析器（每条请求重建，避免上一条请求的状态残留）
                 std::unique_ptr<http::request_parser<http::string_body>> parser;
@@ -164,6 +172,8 @@ namespace Net
 
                 /// @brief 当前请求的上下文（业务层只读）
                 Url url;
+
+                std::unique_ptr<HttpHandleFunction> HHF = nullptr;
             };
 
             /// @brief      HTTP 接收服务端

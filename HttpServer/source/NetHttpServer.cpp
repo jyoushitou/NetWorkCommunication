@@ -67,8 +67,8 @@ namespace Net
             /// @details    接管 socket，并把空闲超时与发送上限交给基类；随后记一次活动时间
             /// @note       HTTP 链路不走基类的二进制消息回调，所以 HF 传空
             HttpSession::HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                                     std::shared_ptr<HandleFunction> HF, long long timeout, int maxSendBufLen)
-                : Net::Server::Session(io, std::move(sock), HF, timeout, maxSendBufLen)
+                                     std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen)
+                : Net::Server::Session(io, std::move(sock), nullptr, timeout, maxSendBufLen)
             {
                 // 创建时立即记录活动时间，防止刚建好就被清理定时器误删
                 updateTime();
@@ -97,7 +97,7 @@ namespace Net
                 updateTime();
 
                 // 保活：异步回调执行期间会话不能被析构
-                auto self = std::static_pointer_cast<HttpSession>(getSession());
+                auto self = getSession();
 
                 // 两段式读取的第一段：只读到请求头结束，此时 body 还没有读
                 boost::beast::http::async_read_header(socket, buffer, *parser,
@@ -106,7 +106,7 @@ namespace Net
                                                           // 对端在 keep-alive 空闲期正常关闭，不是错误
                                                           if (ec == http::error::end_of_stream)
                                                           {
-                                                              self->Stop();
+                                                              self->closeSession();
                                                               return;
                                                           }
 
@@ -115,7 +115,7 @@ namespace Net
                                                           {
                                                               Utils::Out::outErr("HTTP 读取请求头失败：" +
                                                                                  ec.message());
-                                                              self->Stop();
+                                                              self->errCloseSession();
                                                               return;
                                                           }
 
@@ -130,13 +130,13 @@ namespace Net
                                                           // 没有 body（GET、Content-Length: 0）→ 直接进业务
                                                           if (self->parser->is_done())
                                                           {
-                                                              self->HandleRequest();
+                                                              self->handleToWork();
                                                               return;
                                                           }
 
                                                           // 有 body（Content-Length > 0 或 Transfer-Encoding:
                                                           // chunked）→ 继续读
-                                                          self->ReadBody();
+                                                          self->readBody();
                                                       });
             }
 
@@ -144,64 +144,65 @@ namespace Net
             /// @details    两段式读取的第二段：在同一个 parser 上续读，读完（含 chunked 解码）后进业务
             /// @warning    判断「要不要读 body」必须用 parser->is_done()，不能用 Content-Length ——
             ///             chunked 请求根本没有这个头
-            void HttpSession::ReadBody()
+            void HttpSession::readBody()
             {
-                UpdateActiveTime();
-                auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
+                updateTime();
 
-                http::async_read(socket, buffer, *parser,
-                                 [self](boost::system::error_code ec, std::size_t)
-                                 {
-                                     // 请求体超过 parser->body_limit()：剩余 body 还在流里，只能回 413 后断开
-                                     if (ec == http::error::body_limit)
-                                     {
-                                         Utils::Out::outErr("HTTP 请求体超过上限，返回 413");
-                                         self->httpReplay(R"({"code":413,"msg":"payload too large"})",
-                                                          http::status::payload_too_large);
-                                         return;
-                                     }
+                // 保活
+                auto self = getSession();
 
-                                     // 对端在发 body 的过程中正常关闭
-                                     if (ec == http::error::end_of_stream)
-                                     {
-                                         self->Stop();
-                                         return;
-                                     }
+                // 读取http body
+                boost::beast::http::async_read(socket, buffer, *parser,
+                                               [self](boost::system::error_code ec, std::size_t)
+                                               {
+                                                   // 请求体超过 parser->body_limit()：剩余 body 还在流里，只能回 413
+                                                   // 后断开
+                                                   if (ec == http::error::body_limit)
+                                                   {
+                                                       Utils::Out::outErr("HTTP 请求体超过上限，返回 413");
+                                                       self->httpReplay(R"({"code":413,"msg":"payload too large"})",
+                                                                        http::status::payload_too_large);
+                                                       return;
+                                                   }
 
-                                     if (ec)
-                                     {
-                                         Utils::Out::outErr("HTTP 读取请求体失败：" + ec.message());
-                                         self->Stop();
-                                         return;
-                                     }
+                                                   // 对端在发 body 的过程中正常关闭
+                                                   if (ec == http::error::end_of_stream)
+                                                   {
+                                                       self->closeSession();
+                                                       return;
+                                                   }
 
-                                     // chunked 已由 Beast 解码，这里拿到的是完整明文
-                                     self->url.body = self->parser->get().body();
-                                     self->UpdateActiveTime();
-                                     self->HandleRequest();
-                                 });
+                                                   if (ec)
+                                                   {
+                                                       Utils::Out::outErr("HTTP 读取请求体失败：" + ec.message());
+                                                       self->errCloseSession();
+                                                       return;
+                                                   }
+
+                                                   // chunked 已由 Beast 解码，这里拿到的是完整明文
+                                                   self->url.body = self->parser->get().body();
+                                                   self->updateTime();
+                                                   self->handleToWork();
+                                               });
             }
 
             /// @brief      处理请求
             /// @details    置忙标记后调用业务回调；返回值非空则立刻回包，
             ///             为空则保持忙标记，等业务层异步回包
             /// @warning    回调在 IO 线程内执行，业务里禁止阻塞
-            void HttpSession::HandleRequest()
+            void HttpSession::handleToWork()
             {
                 // 标记忙碌：请求处理期间（包括等待业务异步回包）不允许被清理定时器关掉
                 busy.store(true, std::memory_order_relaxed);
-                UpdateActiveTime();
+                updateTime();
 
                 auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
 
                 std::string response;
                 try
                 {
-                    // 交给服务端统一分发：本层不做任何路由，方法/目标/请求体原样上抛
-                    if (http_server != nullptr)
-                        response = http_server->HandleVueRequest(self);
-                    else
-                        response = ErrorBody("http server not set");
+                    // 调用回调
+                    (*HHF)(getSession(), url);
                 }
                 catch (const std::exception& e)
                 {
