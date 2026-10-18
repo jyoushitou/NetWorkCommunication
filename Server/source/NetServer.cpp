@@ -365,7 +365,7 @@ namespace Net
                                               try
                                               {
                                                   // 回复提醒消息
-                                                  it->toSend(0LL, "长时间未发送，关闭连接");
+                                                  it->reply(0LL, "长时间未发送，关闭连接");
                                               }
                                               catch (const std::exception& e)
                                               {

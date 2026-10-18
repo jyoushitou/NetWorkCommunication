@@ -80,7 +80,7 @@ namespace Net
             /// @details    置位停止标志并走基类的优雅关闭（先把发送队列发完再断开）
             /// @warning    线程安全，最终关闭在 IO 线程内完成
             /// @note
-            void closeSession();
+            virtual void closeSession();
 
             /// @brief      是否已关闭
             /// @details    判断连接是否已进入关闭流程（stop / closing）或 socket 已断开

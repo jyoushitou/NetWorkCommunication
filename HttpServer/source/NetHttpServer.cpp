@@ -87,53 +87,57 @@ namespace Net
                 parser->header_limit(kMaxHeaderBytes); // 请求头上限，超了会得到 header_limit 错误
 
                 // 清空上一条请求的上下文
-                // ★ buffer 不能清：里面可能已经缓存了下一条请求的字节（HTTP pipelining）
+                // buffer 不能清：里面可能已经缓存了下一条请求的字节（HTTP pipelining）
                 url = Url{};
 
                 // 新请求开始，先解除忙碌标记
                 busy.store(false, std::memory_order_relaxed);
-                UpdateActiveTime();
+
+                // 更新时间
+                updateTime();
 
                 // 保活：异步回调执行期间会话不能被析构
-                auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
+                auto self = std::static_pointer_cast<HttpSession>(getSession());
 
                 // 两段式读取的第一段：只读到请求头结束，此时 body 还没有读
-                http::async_read_header(socket, buffer, *parser,
-                                        [self](boost::system::error_code ec, std::size_t)
-                                        {
-                                            // 对端在 keep-alive 空闲期正常关闭，不是错误
-                                            if (ec == http::error::end_of_stream)
-                                            {
-                                                self->Stop();
-                                                return;
-                                            }
+                boost::beast::http::async_read_header(socket, buffer, *parser,
+                                                      [self](boost::system::error_code ec, std::size_t)
+                                                      {
+                                                          // 对端在 keep-alive 空闲期正常关闭，不是错误
+                                                          if (ec == http::error::end_of_stream)
+                                                          {
+                                                              self->Stop();
+                                                              return;
+                                                          }
 
-                                            // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
-                                            if (ec)
-                                            {
-                                                Utils::Out::outErr("HTTP 读取请求头失败：" + ec.message());
-                                                self->Stop();
-                                                return;
-                                            }
+                                                          // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
+                                                          if (ec)
+                                                          {
+                                                              Utils::Out::outErr("HTTP 读取请求头失败：" +
+                                                                                 ec.message());
+                                                              self->Stop();
+                                                              return;
+                                                          }
 
-                                            // 把请求头里的信息落到上下文里（业务层只认 Url）
-                                            auto& req = self->parser->get();
-                                            self->url.method = std::string(req.method_string());
-                                            self->url.target = std::string(req.target());
-                                            self->url.version = req.version();
-                                            self->url.keep_alive = req.keep_alive();
-                                            self->UpdateActiveTime();
+                                                          // 把请求头里的信息落到上下文里（业务层只认 Url）
+                                                          auto& req = self->parser->get();
+                                                          self->url.method = std::string(req.method_string());
+                                                          self->url.target = std::string(req.target());
+                                                          self->url.version = req.version();
+                                                          self->url.keep_alive = req.keep_alive();
+                                                          self->updateTime();
 
-                                            // 没有 body（GET、Content-Length: 0）→ 直接进业务
-                                            if (self->parser->is_done())
-                                            {
-                                                self->HandleRequest();
-                                                return;
-                                            }
+                                                          // 没有 body（GET、Content-Length: 0）→ 直接进业务
+                                                          if (self->parser->is_done())
+                                                          {
+                                                              self->HandleRequest();
+                                                              return;
+                                                          }
 
-                                            // 有 body（Content-Length > 0 或 Transfer-Encoding: chunked）→ 继续读
-                                            self->ReadBody();
-                                        });
+                                                          // 有 body（Content-Length > 0 或 Transfer-Encoding:
+                                                          // chunked）→ 继续读
+                                                          self->ReadBody();
+                                                      });
             }
 
             /// @brief      读取消息体
@@ -310,10 +314,10 @@ namespace Net
 
             /// @brief 关闭连接
             /// @details 走基类的优雅关闭，并把本会话从 HttpServer 的会话表里移除
-            void HttpSession::Stop()
+            void HttpSession::closeSession()
             {
                 // 基类：置停止标志 + 优雅关闭（关 socket 时回调 derivedToClose）
-                closeSession();
+                Session::closeSession();
 
                 // 从服务端会话表中摘掉自己；析构期间 http_server 会被置空，这里必须判空
                 if (http_server != nullptr)

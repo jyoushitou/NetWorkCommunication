@@ -123,7 +123,7 @@ namespace Net
                 /// @details 走基类的优雅关闭，并把本会话从 HttpServer 的会话表里移除
                 /// @warning 线程安全（内部 post 到 IO 线程）
                 /// @note
-                void Stop();
+                void closeSession() override;
 
                 /// @brief  是否在忙（正在处理请求，含等待业务异步回包）
                 /// @return 忙返回 true
@@ -133,14 +133,8 @@ namespace Net
                     return busy.load(std::memory_order_relaxed);
                 }
 
-                /// @brief 是否正在处理请求（避免清理线程误杀正在等待微服务返回的会话）
-                std::atomic<bool> busy{false};
-
                 /// @brief 最近一次活动时间（steady_clock 毫秒）
                 std::atomic<long long> last_active_ms{0};
-
-                /// @brief 当前请求的上下文（业务层只读）
-                Url url;
 
                 /// @brief 所属服务端（由 HttpServer 创建会话时赋值；析构前会被置空）
                 HttpServer* http_server = nullptr;
@@ -164,6 +158,12 @@ namespace Net
 
                 /// @brief 读缓冲（跟随连接复用，保存半包与多读的字节，任何时候都不要手动清空）
                 beast::flat_buffer buffer;
+
+                /// @brief 是否正在处理请求（避免清理线程误杀正在等待微服务返回的会话）
+                std::atomic<bool> busy = false;
+
+                /// @brief 当前请求的上下文（业务层只读）
+                Url url;
             };
 
             /// @brief      HTTP 接收服务端
