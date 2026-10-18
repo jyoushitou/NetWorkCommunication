@@ -96,6 +96,10 @@ namespace Net
             bool timeOut();
 
         protected:
+            // 将tosend函数降级为保护
+            // 发送消息使用reply
+            using Connection::toSend;
+
             /// @brief      业务处理
             /// @details    收到消息后的具体业务实现，由基类回调触发：内容为 kCloseCommand 时关闭会话，
             ///             否则转交 HF 处理（HF 为空时也关闭会话）
@@ -126,7 +130,6 @@ namespace Net
             /// @details 用于收到消息的具体消息处理（在 IO 线程内调用）
             std::shared_ptr<HandleFunction> HF = nullptr;
 
-        private:
             /// @brief 停止标志
             /// @details 标识该会话是否已被请求关闭（由 closeSession 置位）
             /// @note

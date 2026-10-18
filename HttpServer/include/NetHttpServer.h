@@ -99,11 +99,6 @@ namespace Net
                 HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                             std::shared_ptr<HandleFunction> HF, long long timeout, int maxSendBufLen);
 
-                /// @brief 析构函数
-                /// @details 解析器、读缓冲随对象一起释放
-                /// @note
-                ~HttpSession() override = default;
-
                 /// @brief      开始（或继续）读取下一条 HTTP 请求
                 /// @details    重建解析器 → 清空请求上下文 → 异步读请求头；
                 ///             响应写完且允许 keep-alive 时会被再次调用，构成请求循环
@@ -166,11 +161,6 @@ namespace Net
                 ///             为空则保持忙标记，等业务层异步回包
                 /// @note       仅 IO 线程内调用
                 void HandleRequest();
-
-                /// @brief      刷新活动时间
-                /// @details    同时刷新基类的 lastTime（供基类 timeOut() 使用）与本类的 last_active_ms
-                /// @note       每次读写完成后调用
-                void UpdateActiveTime();
 
                 /// @brief 请求解析器（每条请求重建，避免上一条请求的状态残留）
                 std::unique_ptr<http::request_parser<http::string_body>> parser;
