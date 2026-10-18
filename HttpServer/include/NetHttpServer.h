@@ -61,11 +61,8 @@ namespace Net
             /// @brief HTTP 会话前向声明
             class HttpSession;
 
-            /// @brief HTTP 服务端前向声明
-            class HttpServer;
-
             /// @brief 业务回调类型
-            /// @details 名字沿用历史（最初只服务 Vue 前端）；现在与前端无关，就是通用业务回调
+            /// @details 与前端无关，是通用业务回调
             /// @param[in] session 当前会话（业务层可持有它做异步回包）
             /// @param[in] url 请求上下文（方法/目标/版本/请求体/复用意愿）
             /// @return 非空字符串 = 同步回包，内容直接作为响应体；
@@ -74,7 +71,7 @@ namespace Net
             /// @warning 回调在 IO 线程内执行，禁止长时间阻塞；慢业务请切到工作线程，
             ///          算完后用 AsyncSendResponse 回包（该接口线程安全）
             /// @note
-            using VueCallBack = std::function<std::string(const std::shared_ptr<HttpSession>&, const Url&)>;
+            using HttpHandleFunction = std::function<void(const std::shared_ptr<HttpSession>&, const Url&)>;
 
             /// @brief      HTTP 会话
             /// @details    一条 TCP 连接上的 HTTP 请求循环：
@@ -120,7 +117,7 @@ namespace Net
                 /// @param[in] body 响应体（空串会被忽略）
                 /// @warning    会话已关闭、或当前没有请求在等回包时，本次调用被丢弃
                 /// @note
-                void AsyncSendResponse(const std::string& body);
+                void httpAsyncReplay(const std::string& body);
 
                 /// @brief 关闭连接
                 /// @details 走基类的优雅关闭，并把本会话从 HttpServer 的会话表里移除
@@ -148,6 +145,12 @@ namespace Net
                 /// @brief 所属服务端（由 HttpServer 创建会话时赋值；析构前会被置空）
                 HttpServer* http_server = nullptr;
 
+                /// @brief      处理请求
+                /// @details    置忙标记后调用业务回调；返回值非空则立刻回包，
+                ///             为空则保持忙标记，等业务层异步回包
+                /// @note       仅 IO 线程内调用
+                void HandleRequest();
+
             private:
                 /// @brief      读取请求体
                 /// @details    两段式读取的第二段：在同一个 parser 上续读，读完（含 chunked 解码）后进业务
@@ -155,12 +158,6 @@ namespace Net
                 ///             chunked 请求根本没有这个头
                 /// @note       仅 IO 线程内调用
                 void ReadBody();
-
-                /// @brief      处理请求
-                /// @details    置忙标记后调用业务回调；返回值非空则立刻回包，
-                ///             为空则保持忙标记，等业务层异步回包
-                /// @note       仅 IO 线程内调用
-                void HandleRequest();
 
                 /// @brief 请求解析器（每条请求重建，避免上一条请求的状态残留）
                 std::unique_ptr<http::request_parser<http::string_body>> parser;

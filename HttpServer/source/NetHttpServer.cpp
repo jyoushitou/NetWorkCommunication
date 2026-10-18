@@ -71,7 +71,7 @@ namespace Net
                 : Net::Server::Session(io, std::move(sock), HF, timeout, maxSendBufLen)
             {
                 // 创建时立即记录活动时间，防止刚建好就被清理定时器误删
-                UpdateActiveTime();
+                updateTime();
             }
 
             /// @brief      开始（或继续）读取下一条 HTTP 请求
@@ -83,8 +83,8 @@ namespace Net
                 // HTTP/1.1 默认 Keep-Alive：每条请求处理完后可能要复用本连接继续读下一条，
                 // 这里把解析器重置为初始状态（重新 make_unique，任何 Boost 版本都兼容）
                 parser = std::make_unique<http::request_parser<http::string_body>>();
-                parser->body_limit(kMaxBodyBytes);      // 请求体上限，超了会得到 body_limit 错误
-                parser->header_limit(kMaxHeaderBytes);  // 请求头上限，超了会得到 header_limit 错误
+                parser->body_limit(kMaxBodyBytes);     // 请求体上限，超了会得到 body_limit 错误
+                parser->header_limit(kMaxHeaderBytes); // 请求头上限，超了会得到 header_limit 错误
 
                 // 清空上一条请求的上下文
                 // ★ buffer 不能清：里面可能已经缓存了下一条请求的字节（HTTP pipelining）
@@ -98,43 +98,42 @@ namespace Net
                 auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
 
                 // 两段式读取的第一段：只读到请求头结束，此时 body 还没有读
-                http::async_read_header(
-                    socket, buffer, *parser,
-                    [self](boost::system::error_code ec, std::size_t)
-                    {
-                        // 对端在 keep-alive 空闲期正常关闭，不是错误
-                        if (ec == http::error::end_of_stream)
-                        {
-                            self->Stop();
-                            return;
-                        }
+                http::async_read_header(socket, buffer, *parser,
+                                        [self](boost::system::error_code ec, std::size_t)
+                                        {
+                                            // 对端在 keep-alive 空闲期正常关闭，不是错误
+                                            if (ec == http::error::end_of_stream)
+                                            {
+                                                self->Stop();
+                                                return;
+                                            }
 
-                        // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
-                        if (ec)
-                        {
-                            Utils::Out::outErr("HTTP 读取请求头失败：" + ec.message());
-                            self->Stop();
-                            return;
-                        }
+                                            // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
+                                            if (ec)
+                                            {
+                                                Utils::Out::outErr("HTTP 读取请求头失败：" + ec.message());
+                                                self->Stop();
+                                                return;
+                                            }
 
-                        // 把请求头里的信息落到上下文里（业务层只认 Url）
-                        auto& req = self->parser->get();
-                        self->url.method = std::string(req.method_string());
-                        self->url.target = std::string(req.target());
-                        self->url.version = req.version();
-                        self->url.keep_alive = req.keep_alive();
-                        self->UpdateActiveTime();
+                                            // 把请求头里的信息落到上下文里（业务层只认 Url）
+                                            auto& req = self->parser->get();
+                                            self->url.method = std::string(req.method_string());
+                                            self->url.target = std::string(req.target());
+                                            self->url.version = req.version();
+                                            self->url.keep_alive = req.keep_alive();
+                                            self->UpdateActiveTime();
 
-                        // 没有 body（GET、Content-Length: 0）→ 直接进业务
-                        if (self->parser->is_done())
-                        {
-                            self->HandleRequest();
-                            return;
-                        }
+                                            // 没有 body（GET、Content-Length: 0）→ 直接进业务
+                                            if (self->parser->is_done())
+                                            {
+                                                self->HandleRequest();
+                                                return;
+                                            }
 
-                        // 有 body（Content-Length > 0 或 Transfer-Encoding: chunked）→ 继续读
-                        self->ReadBody();
-                    });
+                                            // 有 body（Content-Length > 0 或 Transfer-Encoding: chunked）→ 继续读
+                                            self->ReadBody();
+                                        });
             }
 
             /// @brief      读取消息体
@@ -146,38 +145,37 @@ namespace Net
                 UpdateActiveTime();
                 auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
 
-                http::async_read(
-                    socket, buffer, *parser,
-                    [self](boost::system::error_code ec, std::size_t)
-                    {
-                        // 请求体超过 parser->body_limit()：剩余 body 还在流里，只能回 413 后断开
-                        if (ec == http::error::body_limit)
-                        {
-                            Utils::Out::outErr("HTTP 请求体超过上限，返回 413");
-                            self->httpReplay(R"({"code":413,"msg":"payload too large"})",
-                                             http::status::payload_too_large);
-                            return;
-                        }
+                http::async_read(socket, buffer, *parser,
+                                 [self](boost::system::error_code ec, std::size_t)
+                                 {
+                                     // 请求体超过 parser->body_limit()：剩余 body 还在流里，只能回 413 后断开
+                                     if (ec == http::error::body_limit)
+                                     {
+                                         Utils::Out::outErr("HTTP 请求体超过上限，返回 413");
+                                         self->httpReplay(R"({"code":413,"msg":"payload too large"})",
+                                                          http::status::payload_too_large);
+                                         return;
+                                     }
 
-                        // 对端在发 body 的过程中正常关闭
-                        if (ec == http::error::end_of_stream)
-                        {
-                            self->Stop();
-                            return;
-                        }
+                                     // 对端在发 body 的过程中正常关闭
+                                     if (ec == http::error::end_of_stream)
+                                     {
+                                         self->Stop();
+                                         return;
+                                     }
 
-                        if (ec)
-                        {
-                            Utils::Out::outErr("HTTP 读取请求体失败：" + ec.message());
-                            self->Stop();
-                            return;
-                        }
+                                     if (ec)
+                                     {
+                                         Utils::Out::outErr("HTTP 读取请求体失败：" + ec.message());
+                                         self->Stop();
+                                         return;
+                                     }
 
-                        // chunked 已由 Beast 解码，这里拿到的是完整明文
-                        self->url.body = self->parser->get().body();
-                        self->UpdateActiveTime();
-                        self->HandleRequest();
-                    });
+                                     // chunked 已由 Beast 解码，这里拿到的是完整明文
+                                     self->url.body = self->parser->get().body();
+                                     self->UpdateActiveTime();
+                                     self->HandleRequest();
+                                 });
             }
 
             /// @brief      处理请求
@@ -234,8 +232,7 @@ namespace Net
 
                 // 报文对象必须活到写完成，用 shared_ptr 交给 lambda 持有；
                 // 版本回显请求的版本，HTTP/1.0 的客户端不认 1.1 的默认复用语义
-                auto res = std::make_shared<http::response<http::string_body>>(
-                    st, url.version ? url.version : 11);
+                auto res = std::make_shared<http::response<http::string_body>>(st, url.version ? url.version : 11);
 
                 // 构建报文
                 res->set(http::field::server, "CommonNetHttpServer");
@@ -257,31 +254,30 @@ namespace Net
                 UpdateActiveTime();
                 auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
 
-                http::async_write(
-                    socket, *res,
-                    [self, res](boost::system::error_code ec, std::size_t)
-                    {
-                        // 无论成功还是失败，这条请求到这里都处理完了
-                        self->busy.store(false, std::memory_order_relaxed);
-                        self->UpdateActiveTime();
+                http::async_write(socket, *res,
+                                  [self, res](boost::system::error_code ec, std::size_t)
+                                  {
+                                      // 无论成功还是失败，这条请求到这里都处理完了
+                                      self->busy.store(false, std::memory_order_relaxed);
+                                      self->UpdateActiveTime();
 
-                        if (ec)
-                        {
-                            Utils::Out::outErr("HTTP 发送响应失败：" + ec.message());
-                            self->Stop();
-                            return;
-                        }
+                                      if (ec)
+                                      {
+                                          Utils::Out::outErr("HTTP 发送响应失败：" + ec.message());
+                                          self->Stop();
+                                          return;
+                                      }
 
-                        // 报文里说了不复用（或客户端要求关闭）→ 关连接
-                        if (!res->keep_alive())
-                        {
-                            self->Stop();
-                            return;
-                        }
+                                      // 报文里说了不复用（或客户端要求关闭）→ 关连接
+                                      if (!res->keep_alive())
+                                      {
+                                          self->Stop();
+                                          return;
+                                      }
 
-                        // 复用连接：继续读下一条请求
-                        self->start();
-                    });
+                                      // 复用连接：继续读下一条请求
+                                      self->start();
+                                  });
             }
 
             /// @brief      线程安全地回复响应
@@ -293,22 +289,23 @@ namespace Net
             {
                 auto self = std::static_pointer_cast<HttpSession>(shared_from_this());
 
-                boost::asio::post(ioc, [self, body]()
-                {
-                    // 空响应体没有意义，直接丢弃（约定了空串表示「异步」，不能拿来回空包）
-                    if (body.empty())
-                        return;
+                boost::asio::post(ioc,
+                                  [self, body]()
+                                  {
+                                      // 空响应体没有意义，直接丢弃（约定了空串表示「异步」，不能拿来回空包）
+                                      if (body.empty())
+                                          return;
 
-                    // 会话已关闭（超时、对端断开）→ 丢弃
-                    if (self->isClosed())
-                        return;
+                                      // 会话已关闭（超时、对端断开）→ 丢弃
+                                      if (self->isClosed())
+                                          return;
 
-                    // 当前没有请求在等回包（同步模式已经回过了）→ 丢弃，避免重复响应
-                    if (!self->busy.load(std::memory_order_relaxed))
-                        return;
+                                      // 当前没有请求在等回包（同步模式已经回过了）→ 丢弃，避免重复响应
+                                      if (!self->busy.load(std::memory_order_relaxed))
+                                          return;
 
-                    self->httpReplay(body);
-                });
+                                      self->httpReplay(body);
+                                  });
             }
 
             /// @brief 关闭连接
@@ -343,13 +340,9 @@ namespace Net
                 : Net::Server::Server(io,
                                       // 基类构造时会 bind 这个端点，而本模块并不使用基类的 accept。
                                       // 若它与 HTTP 端口相同就会抢占端口，这里改用临时端口（0）避开
-                                      (ep.port() == http_port_)
-                                          ? boost::asio::ip::tcp::endpoint{ep.address(), 0}
-                                          : ep,
-                                      nullptr)
-                , http_acceptor(io)
-                , cleanup_timer(io)
-                , http_port(http_port_)
+                                      (ep.port() == http_port_) ? boost::asio::ip::tcp::endpoint{ep.address(), 0} : ep,
+                                      nullptr),
+                  http_acceptor(io), cleanup_timer(io), http_port(http_port_)
             {
                 boost::system::error_code ec;
                 const boost::asio::ip::tcp::endpoint http_ep(ep.address(), http_port);
@@ -480,8 +473,8 @@ namespace Net
                             socket.set_option(boost::asio::ip::tcp::no_delay(true), ignore);
 
                             // 创建 HTTP 会话：socket 交给会话，会话通过 http_server 回调本对象
-                            auto session = std::make_shared<HttpSession>(
-                                ioc, std::move(socket), nullptr, kSessionTimeoutSeconds, kMaxSendBufLen);
+                            auto session = std::make_shared<HttpSession>(ioc, std::move(socket), nullptr,
+                                                                         kSessionTimeoutSeconds, kMaxSendBufLen);
                             session->http_server = this;
 
                             http_sessions.push_back(session);
@@ -526,36 +519,38 @@ namespace Net
             {
                 auto self = std::static_pointer_cast<HttpServer>(shared_from_this());
 
-                boost::asio::post(ioc, [this, self, idle_timeout_ms]()
-                {
-                    const long long now_ms = NowMs();
+                boost::asio::post(ioc,
+                                  [this, self, idle_timeout_ms]()
+                                  {
+                                      const long long now_ms = NowMs();
 
-                    for (auto it = http_sessions.begin(); it != http_sessions.end();)
-                    {
-                        auto& session = *it;
-                        if (!session)
-                        {
-                            it = http_sessions.erase(it);
-                            continue;
-                        }
+                                      for (auto it = http_sessions.begin(); it != http_sessions.end();)
+                                      {
+                                          auto& session = *it;
+                                          if (!session)
+                                          {
+                                              it = http_sessions.erase(it);
+                                              continue;
+                                          }
 
-                        // 已经关闭的会话：直接移出会话表（socket 由会话自己负责关闭）
-                        if (session->isClosed())
-                        {
-                            it = http_sessions.erase(it);
-                            continue;
-                        }
+                                          // 已经关闭的会话：直接移出会话表（socket 由会话自己负责关闭）
+                                          if (session->isClosed())
+                                          {
+                                              it = http_sessions.erase(it);
+                                              continue;
+                                          }
 
-                        // 空闲超时且没在等业务回包 → 主动关闭（Stop 会把自己从表里摘掉）
-                        if (!session->busing() &&
-                            now_ms - session->last_active_ms.load(std::memory_order_relaxed) > idle_timeout_ms)
-                        {
-                            Utils::Out::outMsg("清理空闲超时的 HTTP 会话");
-                            session->Stop();
-                        }
-                        ++it;
-                    }
-                });
+                                          // 空闲超时且没在等业务回包 → 主动关闭（Stop 会把自己从表里摘掉）
+                                          if (!session->busing() &&
+                                              now_ms - session->last_active_ms.load(std::memory_order_relaxed) >
+                                                  idle_timeout_ms)
+                                          {
+                                              Utils::Out::outMsg("清理空闲超时的 HTTP 会话");
+                                              session->Stop();
+                                          }
+                                          ++it;
+                                      }
+                                  });
             }
 
             /// @brief      处理一次请求（业务分发入口）
@@ -582,15 +577,16 @@ namespace Net
             {
                 auto self = std::static_pointer_cast<HttpServer>(shared_from_this());
 
-                boost::asio::post(ioc, [this, self, session]()
-                {
-                    auto it = std::find(http_sessions.begin(), http_sessions.end(), session);
-                    if (it != http_sessions.end())
-                    {
-                        Utils::Out::outMsg("移除 HTTP Session");
-                        http_sessions.erase(it);
-                    }
-                });
+                boost::asio::post(ioc,
+                                  [this, self, session]()
+                                  {
+                                      auto it = std::find(http_sessions.begin(), http_sessions.end(), session);
+                                      if (it != http_sessions.end())
+                                      {
+                                          Utils::Out::outMsg("移除 HTTP Session");
+                                          http_sessions.erase(it);
+                                      }
+                                  });
             }
 
             /// @brief      停止服务
@@ -611,23 +607,24 @@ namespace Net
                 }
 
                 // 保活投递：确保关闭动作在 IO 线程内执行
-                boost::asio::post(ioc, [this, self]()
-                {
-                    boost::system::error_code ec;
-                    http_acceptor.close(ec);
-                    cleanup_timer.cancel(ec);
+                boost::asio::post(ioc,
+                                  [this, self]()
+                                  {
+                                      boost::system::error_code ec;
+                                      http_acceptor.close(ec);
+                                      cleanup_timer.cancel(ec);
 
-                    for (auto& session : http_sessions)
-                    {
-                        if (!session)
-                            continue;
+                                      for (auto& session : http_sessions)
+                                      {
+                                          if (!session)
+                                              continue;
 
-                        // 先断开反向引用，避免会话的 Stop() 在关闭过程中再回调本对象
-                        session->http_server = nullptr;
-                        session->Stop();
-                    }
-                    http_sessions.clear();
-                });
+                                          // 先断开反向引用，避免会话的 Stop() 在关闭过程中再回调本对象
+                                          session->http_server = nullptr;
+                                          session->Stop();
+                                      }
+                                      http_sessions.clear();
+                                  });
 
                 // 顺带把基类的 accept / 监控线程收掉（未启动时基类内部会直接返回）
                 Net::Server::Server::Stop();
