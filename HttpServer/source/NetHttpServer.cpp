@@ -314,23 +314,25 @@ namespace Net
                                   });
             }
 
+            /// @brief  是否在忙（正在处理请求，含等待业务异步回包）
+            /// @return 忙返回 true
+            /// @note   供空闲清理判断，避免误杀正在等业务回包的会话
+            bool HttpSession::busing() const
+            {
+                return busy.load(std::memory_order_relaxed);
+            }
+
             /// @brief 关闭连接
             /// @details 走基类的优雅关闭，并把本会话从 HttpServer 的会话表里移除
             void HttpSession::closeSession()
             {
                 // 基类：置停止标志 + 优雅关闭（关 socket 时回调 derivedToClose）
                 Session::closeSession();
-
-                // 从服务端会话表中摘掉自己；析构期间 http_server 会被置空，这里必须判空
-                if (http_server != nullptr)
-                    http_server->RemoveSession(std::static_pointer_cast<HttpSession>(shared_from_this()));
             }
 
             void HttpSession::errCloseSession()
             {
                 Session::errToClose();
-                if (http_server != nullptr)
-                    http_server->RemoveSession(std::static_pointer_cast<HttpSession>(shared_from_this()));
             }
 
             //========== HttpServer ==========

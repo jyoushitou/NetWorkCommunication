@@ -134,16 +134,10 @@ namespace Net
                 /// @brief  是否在忙（正在处理请求，含等待业务异步回包）
                 /// @return 忙返回 true
                 /// @note   供空闲清理判断，避免误杀正在等业务回包的会话
-                bool busing() const
-                {
-                    return busy.load(std::memory_order_relaxed);
-                }
+                bool busing() const;
 
                 /// @brief 最近一次活动时间（steady_clock 毫秒）
                 std::atomic<long long> last_active_ms{0};
-
-                /// @brief 所属服务端（由 HttpServer 创建会话时赋值；析构前会被置空）
-                HttpServer* http_server = nullptr;
 
                 /// @brief      处理请求
                 /// @details    置忙标记后调用业务回调；返回值非空则立刻回包，
