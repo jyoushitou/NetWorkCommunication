@@ -322,49 +322,53 @@ namespace Net
             /// @brief      构造函数
             /// @details    初始化 HTTP 监听器（open / reuse_address / bind / listen）
             /// @param[in] io 存储 io_context
-            /// @param[in] ep 监听地址（只有地址部分生效，HTTP 端口由 http_port 决定）
-            /// @param[in] http_port_ HTTP 监听端口
+            /// @param[in] ep 监听地址，只有地址部分生效
+            /// @param[in] ephttp http的监听地址，HTTP 端口由 http_port 决定
             HttpServer::HttpServer(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                                   unsigned short http_port_)
-                : Net::Server::Server(io,
-                                      // 基类构造时会 bind 这个端点，而本模块并不使用基类的 accept。
-                                      // 若它与 HTTP 端口相同就会抢占端口，这里改用临时端口（0）避开
-                                      (ep.port() == http_port_) ? boost::asio::ip::tcp::endpoint{ep.address(), 0} : ep,
-                                      nullptr),
-                  http_acceptor(io), cleanup_timer(io), http_port(http_port_)
+                                   boost::asio::ip::tcp::endpoint epHttp, std::shared_ptr<HandleFunction>,
+                                   std::shared_ptr<HttpHandleFunction> HHF, long long timeOut, long long httpTimeOut,
+                                   long long checkTime, long long httpCheckTime, int maxSendBufLen,
+                                   int maxHttpSendBufLen)
+                : Server(io, ep, nullptr), http_acceptor(io), cleanup_timer(io)
             {
-                boost::system::error_code ec;
-                const boost::asio::ip::tcp::endpoint http_ep(ep.address(), http_port);
-
                 // 打开监听器（协议跟随 ep，IPv4 / IPv6 都支持）
-                http_acceptor.open(http_ep.protocol(), ec);
-                if (ec)
-                {
-                    Utils::Out::outErr("HTTP 监听器 open 失败：" + ec.message());
-                    return;
-                }
+                http_acceptor.open(epHttp.protocol());
 
                 // 端口复用：进程重启时不会因为 TIME_WAIT 报「Address already in use」
-                http_acceptor.set_option(boost::asio::socket_base::reuse_address(true), ec);
-                if (ec)
+                http_acceptor.set_option(boost::asio::socket_base::reuse_address(true));
+
+                // 绑定ep
+                http_acceptor.bind(epHttp);
+
+                // 监听ep
+                http_acceptor.listen(boost::asio::socket_base::max_listen_connections);
+
+                // 设置HHF回调
+                this->HHF = HHF;
+
+                // 设置超时时间
+                this->httpTimeOut = (httpTimeOut > 0) ? httpTimeOut : 60;
+                // 设置巡检时间
+                this->httpCheckTime = (httpCheckTime > 0) ? httpCheckTime : 60;
+
+                // 判断timeOut、checkTime是否合法
+                if (httpTimeOut <= 0 || httpCheckTime <= 0)
                 {
-                    Utils::Out::outErr("HTTP 监听器设置 SO_REUSEADDR 失败：" + ec.message());
-                    return;
+                    Utils::Out::outErr("timeOut / checkTime 非法，已回退为默认 60 秒");
                 }
 
-                http_acceptor.bind(http_ep, ec);
-                if (ec)
+                // 初始化每个 session 的发送队列上限（非正数回退为 10MB）
+                this->maxHttpSendBufLen = maxHttpSendBufLen ? maxHttpSendBufLen : 1024 * 1024 * 10;
+
+                // 判断maxSendBufLen是否合法
+                if (maxHttpSendBufLen <= 0)
                 {
-                    Utils::Out::outErr("HTTP 监听器 bind 失败：" + ec.message());
-                    return;
+                    Utils::Out::outErr("maxSendBufLen 非法，已回退为默认1024*1024*10");
                 }
 
-                http_acceptor.listen(boost::asio::socket_base::max_listen_connections, ec);
-                if (ec)
-                {
-                    Utils::Out::outErr("HTTP 监听器 listen 失败：" + ec.message());
-                    return;
-                }
+                httpRunning = false;
+
+                Utils::Out::outMsg("Http服务器初始化完成");
             }
 
             /// @brief      析构函数

@@ -164,8 +164,9 @@ namespace Net
             /// @param[in] maxSendBufLen 每个会话的发送队列允许积压的最大字节数，默认 10MB
             /// @warning    须保证 io 的生命周期长于本服务器；非正数入参会回退为默认值并打印错误日志
             /// @note
-            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut = 60, long long checkTime = 60, int maxSendBufLen = 1024 * 1024 * 10);
+            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
+                   std::shared_ptr<HandleFunction> HF = nullptr, long long timeOut = 60, long long checkTime = 60,
+                   int maxSendBufLen = 1024 * 1024 * 10);
 
             /// @brief      析构函数
             /// @details    先 Stop() 停服并关闭所有会话，再 join 监控线程
@@ -189,6 +190,11 @@ namespace Net
             /// @details    保存服务器使用的 io_context 引用
             /// @warning    生命周期须长于本服务器
             boost::asio::io_context& ioc;
+
+            /// @brief      自身弱引用
+            /// @details    供监控线程与 Stop() 安全地判断 Server 是否仍存活，并保活投递到 IO 线程的任务
+            /// @note       在 start() 中由 shared_from_this() 赋值
+            std::weak_ptr<Server> selfWeak;
 
         private:
             /// @brief      开始接受连接
@@ -233,11 +239,6 @@ namespace Net
             /// @warning    赋值前必须 join 掉上一轮的线程，否则会 std::terminate
             /// @note
             std::thread clearSessionThread;
-
-            /// @brief      自身弱引用
-            /// @details    供监控线程与 Stop() 安全地判断 Server 是否仍存活，并保活投递到 IO 线程的任务
-            /// @note       在 start() 中由 shared_from_this() 赋值
-            std::weak_ptr<Server> selfWeak;
 
             /// @brief      运行状态标志
             /// @details    标识服务器当前是否正在运行；Stop() 置 false 后 accept / 监控线程都会退出

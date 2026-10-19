@@ -192,19 +192,16 @@ namespace Net
                 /// @param[in] http_port_ HTTP 监听端口
                 /// @warning    bind/listen 失败只打印错误日志，此时 StartHttpAccept() 不会开始 accept
                 /// @note
-                HttpServer(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, unsigned short http_port,
-                           HttpHandleFunction HHF);
+                HttpServer(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
+                           boost::asio::ip::tcp::endpoint epHttp, std::shared_ptr<HandleFunction> HF = nullptr,
+                           std::shared_ptr<HttpHandleFunction> HHF, long long timeOut = 60, long long httpTimeOut = 60,
+                           long long checkTime = 60, long long httpcheckTime = 60, int maxSendBufLen = 1024 * 1024 * 10,
+                           int maxHttpSendBufLen = 1024 * 1024 * 10);
 
                 /// @brief 析构函数
                 /// @details 停止接收、关闭监听器与清理定时器，并通知全部会话关闭
                 /// @note
                 ~HttpServer() override;
-
-                /// @brief 注册回调
-                /// @details 回调用 shared_ptr 持有；会话通过 http_server 指针回调到本对象
-                /// @param[in] cb 业务回调
-                /// @note
-                void SetVueCallBack(VueCallBack cb);
 
                 /// @brief 设置空闲超时
                 /// @param[in] idle_timeout_ms 空闲多少毫秒后关闭会话
@@ -271,23 +268,27 @@ namespace Net
                 /// @brief 空闲会话清理定时器
                 boost::asio::steady_timer cleanup_timer;
 
-                /// @brief HTTP 端口
-                unsigned short http_port;
-
                 /// @brief 是否正在接收连接
-                std::atomic<bool> http_running{false};
+                std::atomic<bool> http_running = false;
 
                 /// @brief HTTP 会话集合（仅在 IO 线程内读写）
-                std::vector<std::shared_ptr<HttpSession>> http_sessions;
-
-                /// @brief 自身弱引用（供 accept / 定时器回调安全保活）
-                std::weak_ptr<HttpServer> selfWeak;
-
-                /// @brief 空闲超时（毫秒），由 SetIdleTimeout 修改
-                long long idle_timeout_ms = 60000;
+                std::vector<std::shared_ptr<HttpSession>> httpSessions;
 
                 /// @brief 存储http的回调
                 std::shared_ptr<HttpHandleFunction> HHF = nullptr;
+
+                /// @brief 存储超时时间
+                int httpTimeOut = 0;
+
+                /// @brief 存储轮询时间
+                int httpCheckTime = 0;
+
+                /// @brief 记录每个session的最大发送内存
+                /// @details 下发给每个新建 Session 的发送队列积压上限，单位字节（非正数时回退为 10MB）
+                int maxHttpSendBufLen = 0;
+
+                /// @brief 记录当前的运行状态
+                std::atomic<bool> httpRunning = false;
             };
         } // namespace HttpServer
     } // namespace Server
