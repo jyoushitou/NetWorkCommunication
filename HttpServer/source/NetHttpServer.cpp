@@ -386,13 +386,6 @@ namespace Net
                 }
             }
 
-            /// @brief      注册回调函数
-            /// @param[in] cb 业务回调
-            void HttpServer::SetVueCallBack(VueCallBack cb)
-            {
-                VueCallBackFunction = std::make_shared<VueCallBack>(std::move(cb));
-            }
-
             /// @brief 设置空闲超时
             /// @param[in] idle_timeout_ms 空闲多少毫秒后关闭会话
             void HttpServer::SetIdleTimeout(long long idle_timeout_ms)
