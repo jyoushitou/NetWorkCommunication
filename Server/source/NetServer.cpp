@@ -218,7 +218,7 @@ namespace Net
         Server::~Server()
         {
             // 先触发停止：置 running=false 并关闭 acceptor / 会话
-            Stop();
+            stop();
 
             // 回收清理线程（Stop 已置 running=false，线程会自行退出循环）
             if (clearSessionThread.joinable())
@@ -400,7 +400,7 @@ namespace Net
         /// @details    置 running=false 并 notify_all 唤醒监控线程，再 post 到 IO 线程关闭 acceptor、逐个关闭会话
         /// @warning    调用后服务器不再接受新连接，须重新构造使用
         /// @note       幂等，可重复调用；Server 尚未 start()（selfWeak 为空）时只置标志
-        void Server::Stop()
+        void Server::stop()
         {
             {
                 // 加锁

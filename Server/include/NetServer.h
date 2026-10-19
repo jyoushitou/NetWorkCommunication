@@ -169,7 +169,7 @@ namespace Net
                    int maxSendBufLen = 1024 * 1024 * 10);
 
             /// @brief      析构函数
-            /// @details    先 Stop() 停服并关闭所有会话，再 join 监控线程
+            /// @details    先 stop() 停服并关闭所有会话，再 join 监控线程
             /// @note       派生类析构会自动调用基类析构；join 后可避免 std::thread 析构时 std::terminate
             virtual ~Server();
 
@@ -183,7 +183,7 @@ namespace Net
             /// @details    置 running=false 并 notify_all 唤醒监控线程，再 post 到 IO 线程关闭 acceptor、逐个关闭会话
             /// @warning    调用后服务器不再接受新连接，须重新构造使用
             /// @note       幂等，可重复调用
-            void Stop();
+            void stop();
 
         protected:
             /// @brief      所属的 io_context
@@ -192,7 +192,7 @@ namespace Net
             boost::asio::io_context& ioc;
 
             /// @brief      自身弱引用
-            /// @details    供监控线程与 Stop() 安全地判断 Server 是否仍存活，并保活投递到 IO 线程的任务
+            /// @details    供监控线程与 stop() 安全地判断 Server 是否仍存活，并保活投递到 IO 线程的任务
             /// @note       在 start() 中由 shared_from_this() 赋值
             std::weak_ptr<Server> selfWeak;
 
@@ -205,7 +205,7 @@ namespace Net
             void StartAccept();
 
             /// @brief      监控线程主体
-            /// @details    按 checkTime 周期睡眠（可被 Stop() 立即唤醒），醒来后 post 到 io_context：
+            /// @details    按 checkTime 周期睡眠（可被 stop() 立即唤醒），醒来后 post 到 io_context：
             ///             关闭超时会话，并从 sessions 中移除已关闭的会话
             /// @warning    在独立线程中运行，禁止直接访问只在 IO 线程内读写的 sessions
             /// @note       每轮都通过 selfWeak 取保活指针，取不到说明 Server 已析构，直接退出

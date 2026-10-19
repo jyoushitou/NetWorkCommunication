@@ -58,7 +58,7 @@ int main()
     auto server = std::make_shared<Net::Server::Server>(io, ep, handler, 60, 60, 1024 * 1024 * 100);
 
     // 注册优雅退出回调：收到退出信号时停止服务器
-    Utils::Exit::registerStopCallback([server]() { server->Stop(); });
+    Utils::Exit::registerStopCallback([server]() { server->stop(); });
 
     // 启动服务器（内部启动失效会话监控线程，并开始 accept）
     server->start();
@@ -89,7 +89,7 @@ int main()
     Utils::Out::outMsg("服务器正在退出...");
 
     // 停止服务器（幂等，可安全重复调用）
-    server->Stop();
+    server->stop();
 
     // 等待 IO 线程结束
     io_thread.join();

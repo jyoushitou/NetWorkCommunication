@@ -218,16 +218,13 @@ namespace Net
                 /// @details 等价于 StartHttpAccept()。这里故意隐藏基类的 start()（非虚），
                 ///          避免有人误启动基类「二进制协议」的 accept 循环
                 /// @note
-                void start()
-                {
-                    StartHttpAccept();
-                }
+                void start();
 
                 /// @brief      停止服务
                 /// @details    关闭监听器与清理定时器，并通知全部会话关闭
                 /// @warning    线程安全（内部 post 到 IO 线程执行关闭动作）
                 /// @note       可重复调用
-                void Stop() override;
+                void stop() override;
 
                 /// @brief      处理一次请求（业务分发入口）
                 /// @details    本层不做任何路由：直接把请求上下文交给业务回调，
@@ -256,20 +253,13 @@ namespace Net
 
                 /// @brief      清理空闲超时的 HTTP 会话
                 /// @details    遍历会话表：已关闭的直接移出；空闲超时且不在等业务回包的主动关闭
-                /// @param[in] idle_timeout_ms 空闲多少毫秒算超时
                 /// @warning    正在等业务异步回包（busy）的会话不在这里杀，
                 ///             避免把慢业务的结果打断（业务层需自己保证最终回包）
                 /// @note       线程安全：内部 post 到 IO 线程执行
-                void CleanupIdleSessions(long long idle_timeout_ms);
+                void CleanupIdleSessions();
 
                 /// @brief HTTP 监听器
-                boost::asio::ip::tcp::acceptor http_acceptor;
-
-                /// @brief 空闲会话清理定时器
-                boost::asio::steady_timer cleanup_timer;
-
-                /// @brief 是否正在接收连接
-                std::atomic<bool> http_running = false;
+                boost::asio::ip::tcp::acceptor httpAcceptor;
 
                 /// @brief HTTP 会话集合（仅在 IO 线程内读写）
                 std::vector<std::shared_ptr<HttpSession>> httpSessions;
@@ -289,6 +279,8 @@ namespace Net
 
                 /// @brief 记录当前的运行状态
                 std::atomic<bool> httpRunning = false;
+
+                std::thread httpClearSessionThread;
             };
         } // namespace HttpServer
     } // namespace Server

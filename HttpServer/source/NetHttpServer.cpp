@@ -329,19 +329,19 @@ namespace Net
                                    std::shared_ptr<HttpHandleFunction> HHF, long long timeOut, long long httpTimeOut,
                                    long long checkTime, long long httpCheckTime, int maxSendBufLen,
                                    int maxHttpSendBufLen)
-                : Server(io, ep, nullptr), http_acceptor(io), cleanup_timer(io)
+                : Server(io, ep, nullptr), httpAcceptor(io)
             {
                 // 打开监听器（协议跟随 ep，IPv4 / IPv6 都支持）
-                http_acceptor.open(epHttp.protocol());
+                httpAcceptor.open(epHttp.protocol());
 
                 // 端口复用：进程重启时不会因为 TIME_WAIT 报「Address already in use」
-                http_acceptor.set_option(boost::asio::socket_base::reuse_address(true));
+                httpAcceptor.set_option(boost::asio::socket_base::reuse_address(true));
 
                 // 绑定ep
-                http_acceptor.bind(epHttp);
+                httpAcceptor.bind(epHttp);
 
                 // 监听ep
-                http_acceptor.listen(boost::asio::socket_base::max_listen_connections);
+                httpAcceptor.listen(boost::asio::socket_base::max_listen_connections);
 
                 // 设置HHF回调
                 this->HHF = HHF;
@@ -373,27 +373,17 @@ namespace Net
 
             /// @brief      析构函数
             /// @details    停止接收、关闭监听器与清理定时器，并通知所有会话关闭
-            /// @warning    这里直接做同步清理，不调用 Stop()：Stop() 内部用 shared_from_this()
+            /// @warning    这里直接做同步清理，不调用 stop()：Stop() 内部用 shared_from_this()
             ///             保活，而析构阶段已经不存在有效的 shared_ptr
             HttpServer::~HttpServer()
             {
-                http_running.store(false);
 
-                // 关监听器与定时器：挂起的 accept / 定时回调会以 operation_aborted 回来
-                boost::system::error_code ignored;
-                http_acceptor.close(ignored);
-                cleanup_timer.cancel(ignored);
+                stop();
 
-                for (auto& session : http_sessions)
+                if (httpClearSessionThread.joinable())
                 {
-                    if (!session)
-                        continue;
-
-                    // 先断开反向引用，否则会话的 Stop() 会回调 RemoveSession(shared_from_this())
-                    session->http_server = nullptr;
-                    session->Stop();
+                    httpClearSessionThread.join();
                 }
-                http_sessions.clear();
             }
 
             /// @brief      注册回调函数
@@ -423,7 +413,7 @@ namespace Net
                 }
 
                 // 构造时 bind / listen 失败，这里就没有监听器可用
-                if (!http_acceptor.is_open())
+                if (!httpAcceptor.is_open())
                 {
                     Utils::Out::outErr("HTTP 监听器未打开，无法接收连接");
                     http_running.store(false);
@@ -447,7 +437,7 @@ namespace Net
                 if (!self || !http_running.load())
                     return;
 
-                http_acceptor.async_accept(
+                httpAcceptor.async_accept(
                     [this, self](boost::system::error_code ec, boost::asio::ip::tcp::socket socket)
                     {
                         if (!http_running.load())
@@ -539,7 +529,7 @@ namespace Net
                                                   idle_timeout_ms)
                                           {
                                               Utils::Out::outMsg("清理空闲超时的 HTTP 会话");
-                                              session->Stop();
+                                              session->stop();
                                           }
                                           ++it;
                                       }
@@ -585,7 +575,7 @@ namespace Net
             /// @brief      停止服务
             /// @details    置停止标志、关闭监听器与定时器、通知所有会话关闭
             /// @warning    线程安全：关闭动作 post 到 IO 线程执行
-            void HttpServer::Stop()
+            void HttpServer::stop()
             {
                 http_running.store(false);
 
@@ -594,7 +584,7 @@ namespace Net
                 {
                     // 从未启动过：没有挂起的异步操作，直接关掉监听器与定时器即可
                     boost::system::error_code ignored;
-                    http_acceptor.close(ignored);
+                    httpAcceptor.close(ignored);
                     cleanup_timer.cancel(ignored);
                     return;
                 }
@@ -604,7 +594,7 @@ namespace Net
                                   [this, self]()
                                   {
                                       boost::system::error_code ec;
-                                      http_acceptor.close(ec);
+                                      httpAcceptor.close(ec);
                                       cleanup_timer.cancel(ec);
 
                                       for (auto& session : http_sessions)
@@ -612,15 +602,15 @@ namespace Net
                                           if (!session)
                                               continue;
 
-                                          // 先断开反向引用，避免会话的 Stop() 在关闭过程中再回调本对象
+                                          // 先断开反向引用，避免会话的 stop() 在关闭过程中再回调本对象
                                           session->http_server = nullptr;
-                                          session->Stop();
+                                          session->stop();
                                       }
                                       http_sessions.clear();
                                   });
 
                 // 顺带把基类的 accept / 监控线程收掉（未启动时基类内部会直接返回）
-                Net::Server::Server::Stop();
+                Net::Server::Server::stop();
             }
         } // namespace HttpServer
     } // namespace Server
