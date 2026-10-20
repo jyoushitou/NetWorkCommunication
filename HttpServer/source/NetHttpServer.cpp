@@ -377,54 +377,60 @@ namespace Net
             ///             保活，而析构阶段已经不存在有效的 shared_ptr
             HttpServer::~HttpServer()
             {
+                // 判断是否有自定义帧在运行
+                if (running)
+                {
+                    // 先析构父类的对象
+                    Server::~Server();
+                }
 
+                // 运行http停止函数
                 stop();
 
+                // 等待线程结束
                 if (httpClearSessionThread.joinable())
                 {
                     httpClearSessionThread.join();
                 }
             }
 
-            /// @brief 设置空闲超时
-            /// @param[in] idle_timeout_ms 空闲多少毫秒后关闭会话
-            void HttpServer::SetIdleTimeout(long long idle_timeout_ms)
+            void HttpServer::start()
             {
-                this->idle_timeout_ms = (idle_timeout_ms > 0) ? idle_timeout_ms : 60000;
-            }
+                // 判断是否已经启动
+                if (httpRunning.exchange(true))
+                {
+                    Utils::Out::outMsg("服务器已经在运行监听了");
+                    return;
+                }
 
+                StartHttpAccept();
+            }
             /// @brief      开始接受 HTTP 连接
             /// @details    启动 accept 循环与空闲清理定时器；重复调用只有第一次生效
             void HttpServer::StartHttpAccept()
             {
-                // 只允许启动一次
-                bool expected = false;
-                if (!http_running.compare_exchange_strong(expected, true))
+                if (!httpRunning.exchange(true))
                 {
                     Utils::Out::outMsg("HTTP 服务已经在接收连接");
                     return;
                 }
 
-                // 构造时 bind / listen 失败，这里就没有监听器可用
-                if (!httpAcceptor.is_open())
+                if (httpClearSessionThread.joinable())
                 {
-                    Utils::Out::outErr("HTTP 监听器未打开，无法接收连接");
-                    http_running.store(false);
-                    return;
+                    httpClearSessionThread.join();
                 }
 
                 // 弱引用供 accept / 定时器回调保活；要求调用方已用 shared_ptr 持有本对象
                 selfWeak = std::static_pointer_cast<HttpServer>(shared_from_this());
 
-                Utils::Out::outMsg("HTTP 服务开始监听，端口：" + std::to_string(http_port));
+                httpClearSessionThread = std::thread(&HttpServer::clearHttpSession, this);
 
-                doAccept();
-                StartCleanupTimer();
+                startAccept();
             }
 
             /// @brief      发起一次异步 accept
             /// @details    成功则创建会话、放进会话表并启动读循环；无论成败都会续接下一次 accept
-            void HttpServer::doAccept()
+            void HttpServer::startAccept()
             {
                 auto self = selfWeak.lock();
                 if (!self || !http_running.load())
@@ -460,7 +466,7 @@ namespace Net
                         // ★ 无论本次成功还是失败都要续接，
                         //   否则一次 accept 失败之后就再也不能接受新连接了
                         if (http_running.load())
-                            doAccept();
+                            startAccept();
                     });
             }
 

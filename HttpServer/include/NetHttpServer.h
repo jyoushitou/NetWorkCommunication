@@ -203,17 +203,6 @@ namespace Net
                 /// @note
                 ~HttpServer() override;
 
-                /// @brief 设置空闲超时
-                /// @param[in] idle_timeout_ms 空闲多少毫秒后关闭会话
-                /// @note 供 CleanupIdleSessions 使用，默认 60000
-                void SetIdleTimeout(long long idle_timeout_ms);
-
-                /// @brief      开始接受 HTTP 连接
-                /// @details    启动 accept 循环与空闲清理定时器；重复调用只有第一次生效
-                /// @warning    必须已用 shared_ptr 持有本对象
-                /// @note
-                void StartHttpAccept();
-
                 /// @brief  启动
                 /// @details 等价于 StartHttpAccept()。这里故意隐藏基类的 start()（非虚），
                 ///          避免有人误启动基类「二进制协议」的 accept 循环
@@ -224,7 +213,7 @@ namespace Net
                 /// @details    关闭监听器与清理定时器，并通知全部会话关闭
                 /// @warning    线程安全（内部 post 到 IO 线程执行关闭动作）
                 /// @note       可重复调用
-                void stop() override;
+                void stop();
 
                 /// @brief      处理一次请求（业务分发入口）
                 /// @details    本层不做任何路由：直接把请求上下文交给业务回调，
@@ -242,21 +231,23 @@ namespace Net
                 void RemoveSession(const std::shared_ptr<HttpSession>& session);
 
             private:
+                /// @brief      开始接受 HTTP 连接
+                /// @details    启动 accept 循环与空闲清理定时器；重复调用只有第一次生效
+                /// @warning    必须已用 shared_ptr 持有本对象
+                /// @note
+                void StartHttpAccept();
+
                 /// @brief      发起一次异步 accept
                 /// @details    成功则创建会话并启动读循环；无论成功失败都会续接下一次 accept
                 /// @note       仅 IO 线程内调用
-                void doAccept();
+                void startAccept();
 
-                /// @brief 安排下一次空闲会话清理
-                /// @note 仅 IO 线程内调用
-                void StartCleanupTimer();
-
-                /// @brief      清理空闲超时的 HTTP 会话
-                /// @details    遍历会话表：已关闭的直接移出；空闲超时且不在等业务回包的主动关闭
-                /// @warning    正在等业务异步回包（busy）的会话不在这里杀，
-                ///             避免把慢业务的结果打断（业务层需自己保证最终回包）
-                /// @note       线程安全：内部 post 到 IO 线程执行
-                void CleanupIdleSessions();
+                /// @brief      监控线程主体
+                /// @details    按 checkTime 周期睡眠（可被 stop() 立即唤醒），醒来后 post 到 io_context：
+                ///             关闭超时会话，并从 sessions 中移除已关闭的会话
+                /// @warning    在独立线程中运行，禁止直接访问只在 IO 线程内读写的 sessions
+                /// @note       每轮都通过 selfWeak 取保活指针，取不到说明 Server 已析构，直接退出
+                void clearHttpSession();
 
                 /// @brief HTTP 监听器
                 boost::asio::ip::tcp::acceptor httpAcceptor;
@@ -280,6 +271,7 @@ namespace Net
                 /// @brief 记录当前的运行状态
                 std::atomic<bool> httpRunning = false;
 
+                /// @brief 用于http监控线程
                 std::thread httpClearSessionThread;
             };
         } // namespace HttpServer

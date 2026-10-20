@@ -254,7 +254,7 @@ namespace Net
             // 创建监控线程
             clearSessionThread = std::thread(&Server::clearSession, this);
             // 启动监听
-            StartAccept();
+            startAccept();
         }
 
         /// @brief      开始接受连接
@@ -262,7 +262,7 @@ namespace Net
         ///             为每个新连接创建对应的 Session（关闭 NoDelay）后继续接受下一个连接
         /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略
         /// @note       accept 失败时等 100ms 重试，服务器已停止则不再重试
-        void Server::StartAccept()
+        void Server::startAccept()
         {
             // 保活 Server 自身
             auto self = shared_from_this();
@@ -293,7 +293,7 @@ namespace Net
                         session->start();
 
                         // 继续接受下一个连接
-                        StartAccept();
+                        startAccept();
                     }
                     else
                     {
@@ -312,7 +312,7 @@ namespace Net
                             {
                                 if (running)
                                 {
-                                    StartAccept();
+                                    startAccept();
                                 }
                             });
                     }

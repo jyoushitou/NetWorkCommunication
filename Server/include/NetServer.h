@@ -196,13 +196,24 @@ namespace Net
             /// @note       在 start() 中由 shared_from_this() 赋值
             std::weak_ptr<Server> selfWeak;
 
+            /// @brief      运行状态标志
+            /// @details    标识服务器当前是否正在运行；Stop() 置 false 后 accept / 监控线程都会退出
+            /// @note       跨线程读写，故使用 std::atomic
+            std::atomic<bool> running = false;
+
+            /// @brief      会话列表
+            /// @details    管理所有已建立的连接会话
+            /// @warning    Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
+            /// @note       仅在 IO 线程内读写
+            std::vector<std::shared_ptr<Session>> sessions;
+
         private:
             /// @brief      开始接受连接
             /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
             ///             为每个新连接创建 Session（关闭 NoDelay）后继续接受下一个连接
             /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略
             /// @note       accept 失败时等 100ms 重试，服务器已停止则不再重试
-            void StartAccept();
+            void startAccept();
 
             /// @brief      监控线程主体
             /// @details    按 checkTime 周期睡眠（可被 stop() 立即唤醒），醒来后 post 到 io_context：
@@ -215,12 +226,6 @@ namespace Net
             /// @details    保存用于 listen / accept 的 acceptor
             /// @note       仅在 IO 线程内使用
             boost::asio::ip::tcp::acceptor acceptor;
-
-            /// @brief      会话列表
-            /// @details    管理所有已建立的连接会话
-            /// @warning    Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
-            /// @note       仅在 IO 线程内读写
-            std::vector<std::shared_ptr<Session>> sessions;
 
             /// @brief      监控线程互斥锁
             /// @details    与 queueCV 配合保护 running 标志，并保证监控线程的等待可被打断
@@ -239,11 +244,6 @@ namespace Net
             /// @warning    赋值前必须 join 掉上一轮的线程，否则会 std::terminate
             /// @note
             std::thread clearSessionThread;
-
-            /// @brief      运行状态标志
-            /// @details    标识服务器当前是否正在运行；Stop() 置 false 后 accept / 监控线程都会退出
-            /// @note       跨线程读写，故使用 std::atomic
-            std::atomic<bool> running = false;
 
             /// @brief 回调的函数
             /// @details 整个服务器共用的业务处理回调，创建 Session 时下发给每个会话
