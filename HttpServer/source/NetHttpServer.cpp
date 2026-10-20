@@ -432,42 +432,69 @@ namespace Net
             /// @details    成功则创建会话、放进会话表并启动读循环；无论成败都会续接下一次 accept
             void HttpServer::startAccept()
             {
+                // 获得自身引用
                 auto self = selfWeak.lock();
-                if (!self || !http_running.load())
+
+                auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
+
+                if (!self || !httpRunning.load())
+                {
                     return;
+                }
 
-                httpAcceptor.async_accept(
-                    [this, self](boost::system::error_code ec, boost::asio::ip::tcp::socket socket)
-                    {
-                        if (!http_running.load())
-                            return;
+                httpAcceptor.async_accept(*sock,
+                                          [this, self, sock](boost::system::error_code ec)
+                                          {
+                                              if (!httpRunning.load())
+                                                  return;
 
-                        if (ec)
-                        {
-                            // 服务器主动关闭监听器时会有 operation_aborted，属于正常退出流程
-                            if (ec != boost::asio::error::operation_aborted)
-                                Utils::Out::outErr("HTTP accept 失败：" + ec.message());
-                        }
-                        else
-                        {
-                            // 关闭 Nagle：HTTP 都是小包交互，减少延迟
-                            boost::system::error_code ignore;
-                            socket.set_option(boost::asio::ip::tcp::no_delay(true), ignore);
+                                              if (ec)
+                                              {
+                                                  // 服务器主动关闭监听器时会有 operation_aborted，属于正常退出流程
+                                                  if (ec != boost::asio::error::operation_aborted)
+                                                  {
+                                                      Utils::Out::outErr("HTTP accept 失败：" + ec.message());
+                                                  }
 
-                            // 创建 HTTP 会话：socket 交给会话，会话通过 http_server 回调本对象
-                            auto session = std::make_shared<HttpSession>(ioc, std::move(socket), nullptr,
-                                                                         kSessionTimeoutSeconds, kMaxSendBufLen);
-                            session->http_server = this;
+                                                  // 仅在服务器仍在运行时，才输出真正的 accept 错误
+                                                  Utils::Out::outErr("accept 错误: " + ec.what());
 
-                            http_sessions.push_back(session);
-                            session->start();
-                        }
+                                                  if (!running)
+                                                  {
+                                                      return;
+                                                  }
 
-                        // ★ 无论本次成功还是失败都要续接，
-                        //   否则一次 accept 失败之后就再也不能接受新连接了
-                        if (http_running.load())
-                            startAccept();
-                    });
+                                                  // 等待100ms后尝试重新连接
+                                                  auto timer = std::make_shared<boost::asio::steady_timer>(
+                                                      ioc, std::chrono::milliseconds(100));
+                                                  timer->async_wait(
+                                                      [this, self, timer](const boost::system::error_code&)
+                                                      {
+                                                          if (running)
+                                                          {
+                                                              startAccept();
+                                                          }
+                                                      });
+                                              }
+                                              else
+                                              {
+                                                  // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
+                                                  // 构造函数按值接收 socket，需 std::move(*sock)
+                                                  auto session = std::make_shared<HttpSession>(
+                                                      ioc, std::move(*sock), HHF, httpTimeOut, maxHttpSendBufLen);
+                                                  // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
+                                                  session->offNoDelay();
+                                                  // 将session放入sessions里面
+                                                  sessions.push_back(session);
+                                                  // 启动读（Session）
+                                                  session->start();
+                                              }
+
+                                              // 无论本次成功还是失败都要续接，
+                                              // 否则一次 accept 失败之后就再也不能接受新连接了
+                                              if (httpRunning.load())
+                                                  startAccept();
+                                          });
             }
 
             /// @brief      安排下一次空闲会话清理

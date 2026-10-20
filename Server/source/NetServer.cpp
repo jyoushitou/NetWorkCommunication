@@ -270,6 +270,11 @@ namespace Net
             // 创建一个 socket 用于 accept
             auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
 
+            if (!self || !running.load())
+            {
+                return;
+            }
+
             // 异步等待并接受新连接
             acceptor.async_accept(
                 *sock,
