@@ -137,13 +137,13 @@ namespace Net
                 /// @note   供空闲清理判断，避免误杀正在等业务回包的会话
                 bool busing() const;
 
+            private:
                 /// @brief      处理请求
                 /// @details    置忙标记后调用业务回调；返回值非空则立刻回包，
                 ///             为空则保持忙标记，等业务层异步回包
                 /// @note       仅 IO 线程内调用
                 void handleToWork();
 
-            private:
                 /// @brief      读取请求体
                 /// @details    两段式读取的第二段：在同一个 parser 上续读，读完（含 chunked 解码）后进业务
                 /// @warning    判断「要不要读 body」必须用 parser->is_done()，不能用 Content-Length ——
@@ -215,21 +215,6 @@ namespace Net
                 /// @note       可重复调用
                 void stop();
 
-                /// @brief      处理一次请求（业务分发入口）
-                /// @details    本层不做任何路由：直接把请求上下文交给业务回调，
-                ///             回调返回什么就回什么
-                /// @param[in] session 当前会话
-                /// @return 响应体；空串表示业务层要异步回包
-                /// @warning 在 IO 线程内调用，回调禁止长时间阻塞
-                /// @note
-                std::string HandleVueRequest(const std::shared_ptr<HttpSession>& session);
-
-                /// @brief      移除并关闭指定会话
-                /// @details    从会话表中摘除（内部 post 到 IO 线程，避免跨线程改 vector）
-                /// @param[in] session 待移除的会话
-                /// @note       可重复调用
-                void RemoveSession(const std::shared_ptr<HttpSession>& session);
-
             private:
                 /// @brief      开始接受 HTTP 连接
                 /// @details    启动 accept 循环与空闲清理定时器；重复调用只有第一次生效
@@ -273,6 +258,8 @@ namespace Net
 
                 /// @brief 用于http监控线程
                 std::thread httpClearSessionThread;
+
+                std::mutex queueHttpMutex;
             };
         } // namespace HttpServer
     } // namespace Server

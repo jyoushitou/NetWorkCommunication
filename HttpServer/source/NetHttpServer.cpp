@@ -499,103 +499,14 @@ namespace Net
 
             /// @brief      安排下一次空闲会话清理
             /// @details    用定时器在 IO 线程内周期触发，不需要额外的轮询线程
-            void HttpServer::StartCleanupTimer()
+            void HttpServer::clearHttpSession()
             {
-                auto self = selfWeak.lock();
-                if (!self || !http_running.load())
-                    return;
-
-                cleanup_timer.expires_after(std::chrono::seconds(kCleanupIntervalSeconds));
-                cleanup_timer.async_wait(
-                    [this, self](boost::system::error_code ec)
-                    {
-                        // operation_aborted = 服务器停止时取消了定时器，正常退出
-                        if (ec || !http_running.load())
-                            return;
-
-                        CleanupIdleSessions(idle_timeout_ms);
-                        StartCleanupTimer();
-                    });
-            }
-
-            /// @brief      清理空闲超时的 HTTP 会话
-            /// @details    遍历会话表：已关闭的直接移出；空闲超时且不在等业务回包的主动关闭
-            /// @param[in] idle_timeout_ms 空闲多少毫秒算超时
-            /// @warning    正在等业务异步回包（busy）的会话不在这里杀，
-            ///             避免把慢业务的结果打断（业务层需自己保证最终回包）
-            /// @note       线程安全：内部 post 到 IO 线程执行
-            void HttpServer::CleanupIdleSessions(long long idle_timeout_ms)
-            {
-                auto self = std::static_pointer_cast<HttpServer>(shared_from_this());
-
-                boost::asio::post(ioc,
-                                  [this, self, idle_timeout_ms]()
-                                  {
-                                      const long long now_ms = NowMs();
-
-                                      for (auto it = http_sessions.begin(); it != http_sessions.end();)
-                                      {
-                                          auto& session = *it;
-                                          if (!session)
-                                          {
-                                              it = http_sessions.erase(it);
-                                              continue;
-                                          }
-
-                                          // 已经关闭的会话：直接移出会话表（socket 由会话自己负责关闭）
-                                          if (session->isClosed())
-                                          {
-                                              it = http_sessions.erase(it);
-                                              continue;
-                                          }
-
-                                          // 空闲超时且没在等业务回包 → 主动关闭（Stop 会把自己从表里摘掉）
-                                          if (!session->busing() &&
-                                              now_ms - session->last_active_ms.load(std::memory_order_relaxed) >
-                                                  idle_timeout_ms)
-                                          {
-                                              Utils::Out::outMsg("清理空闲超时的 HTTP 会话");
-                                              session->stop();
-                                          }
-                                          ++it;
-                                      }
-                                  });
-            }
-
-            /// @brief      处理一次请求（业务分发入口）
-            /// @details    本层不做任何路由：直接把请求上下文交给业务回调，回调返回什么就回什么
-            /// @param[in] session 当前会话
-            /// @return 响应体；空串表示业务层要异步回包
-            std::string HttpServer::HandleVueRequest(const std::shared_ptr<HttpSession>& session)
-            {
-                // 回调没注册就回错误（属于配置问题，不能返回空串，否则会被当成「异步回包」）
-                if (!VueCallBackFunction || !(*VueCallBackFunction))
+                while (running.load())
                 {
-                    Utils::Out::outErr("未设置 HTTP 业务回调函数！");
-                    return R"({"code":2,"msg":"business callback not set"})";
+                    {
+                        std::unique_lock<std::mutex> lock(queueHttpMutex);
+                    }
                 }
-
-                // 把请求原样交给业务层：方法、目标、请求体都在 session->url 里
-                return (*VueCallBackFunction)(session, session->url);
-            }
-
-            /// @brief      移除并关闭指定会话
-            /// @details    从会话表中摘除（内部 post 到 IO 线程，避免跨线程改 vector）
-            /// @param[in] session 待移除的会话
-            void HttpServer::RemoveSession(const std::shared_ptr<HttpSession>& session)
-            {
-                auto self = std::static_pointer_cast<HttpServer>(shared_from_this());
-
-                boost::asio::post(ioc,
-                                  [this, self, session]()
-                                  {
-                                      auto it = std::find(http_sessions.begin(), http_sessions.end(), session);
-                                      if (it != http_sessions.end())
-                                      {
-                                          Utils::Out::outMsg("移除 HTTP Session");
-                                          http_sessions.erase(it);
-                                      }
-                                  });
             }
 
             /// @brief      停止服务
