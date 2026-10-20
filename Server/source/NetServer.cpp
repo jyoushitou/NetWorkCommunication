@@ -234,7 +234,7 @@ namespace Net
         void Server::start()
         {
             // 判断是否已经启动
-            if (running.exchange(true))
+            if (running)
             {
                 Utils::Out::outMsg("服务器已经在运行监听了");
                 return;
@@ -247,14 +247,37 @@ namespace Net
                 clearSessionThread.join();
             }
 
-            // 此处一定安全
-            auto self = shared_from_this();
-            // 让清理线程有弱引用可用
-            selfWeak = self;
-            // 创建监控线程
-            clearSessionThread = std::thread(&Server::clearSession, this);
-            // 启动监听
-            startAccept();
+            // 置运行运行状态
+            running = true;
+
+            // 捕获运行时的错误
+            try
+            {
+
+                // 此处一定安全
+                auto self = shared_from_this();
+                // 让清理线程有弱引用可用
+                selfWeak = self;
+                // 创建监控线程
+                clearSessionThread = std::thread(&Server::clearSession, this);
+                // 启动监听
+                startAccept();
+            }
+            catch (...)
+            {
+                // 置空
+                running.store(false);
+                // 唤醒监控线程关闭
+                queueCV.notify_all();
+                // 等待监控线程结束
+                if (clearSessionThread.joinable())
+                {
+                    clearSessionThread.join();
+                }
+
+                // 抛出异常
+                throw;
+            }
         }
 
         /// @brief      开始接受连接
