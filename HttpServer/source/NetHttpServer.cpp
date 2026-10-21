@@ -274,8 +274,8 @@ namespace Net
                 }
 
                 // 只有请求体读完才允许复用连接：提前拒绝（413）时流里还有未读数据，必须关
-                const bool keep = url.keep_alive && parser && parser->is_done() &&
-                                  !closeAfterReply.load(std::memory_order_relaxed);
+                const bool keep =
+                    url.keep_alive && parser && parser->is_done() && !closeAfterReply.load(std::memory_order_relaxed);
 
                 // 报文对象必须活到写完成，用 shared_ptr 交给 lambda 持有；
                 // 版本回显请求的版本，HTTP/1.0 的客户端不认 1.1 的默认复用语义
@@ -503,7 +503,7 @@ namespace Net
             void HttpServer::start()
             {
                 // 判断是否已经启动
-                if (httpRunning.exchange(true))
+                if (httpRunning)
                 {
                     Utils::Out::outMsg("HTTP 服务器已经在运行监听了");
                     return;
@@ -516,15 +516,41 @@ namespace Net
                     httpClearSessionThread.join();
                 }
 
-                // 基类的 selfWeak 在这里指向本对象（Server 继承自 enable_shared_from_this<Server>，
-                // 这里向下转型后存入基类的 weak_ptr，巡检线程与 stop() 都靠它安全保活）
-                selfWeak = std::static_pointer_cast<HttpServer>(shared_from_this());
+                // 监听器在构造函数里开过一次，closeAll() 之后不会自动重开（见 P-02）
+                if (!httpAcceptor.is_open())
+                {
+                    Utils::Out::outErr("HTTP 监听器已关闭，无法重启；请重新构造 HttpServer 对象");
+                    return;
+                }
 
-                // 创建巡检线程
-                httpClearSessionThread = std::thread(&HttpServer::clearHttpSession, this);
+                // 将运行状态置为true
+                httpRunning.store(true);
 
-                // 开始接受连接
-                startAccept();
+                try
+                {
+                    // 基类的 selfWeak 在这里指向本对象（Server 继承自 enable_shared_from_this<Server>，
+                    // 这里向下转型后存入基类的 weak_ptr，巡检线程与 stop() 都靠它安全保活）
+                    selfWeak = std::static_pointer_cast<HttpServer>(shared_from_this());
+
+                    // 创建巡检线程
+                    httpClearSessionThread = std::thread(&HttpServer::clearHttpSession, this);
+
+                    // 开始接受连接
+                    startAccept();
+                }
+                catch (...)
+                {
+                    // 置为false
+                    httpRunning.store(false);
+                    // 唤醒监控线程
+                    queueHttpCV.notify_all();
+                    if (httpClearSessionThread.joinable())
+                    {
+                        httpClearSessionThread.join();
+                    }
+                    // 继续向上抛出异常
+                    throw;
+                }
             }
 
             /// @brief      开始接受连接
@@ -546,53 +572,54 @@ namespace Net
                 auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
 
                 // 异步等待并接受新连接
-                httpAcceptor.async_accept(
-                    *sock,
-                    [this, self, sock](boost::system::error_code ec)
-                    {
-                        // 服务器已停止：acceptor 被主动关闭导致的取消错误是正常退出流程的一部分
-                        if (!httpRunning.load())
-                        {
-                            return;
-                        }
+                httpAcceptor.async_accept(*sock,
+                                          [this, self, sock](boost::system::error_code ec)
+                                          {
+                                              // 服务器已停止：acceptor 被主动关闭导致的取消错误是正常退出流程的一部分
+                                              if (!httpRunning.load())
+                                              {
+                                                  return;
+                                              }
 
-                        if (ec)
-                        {
-                            // 主动关闭监听器引发的取消：正常退出，不必刷错误日志
-                            if (ec != boost::asio::error::operation_aborted)
-                            {
-                                Utils::Out::outErr("HTTP accept 错误: " + ec.message());
-                            }
+                                              if (ec)
+                                              {
+                                                  // 主动关闭监听器引发的取消：正常退出，不必刷错误日志
+                                                  if (ec != boost::asio::error::operation_aborted)
+                                                  {
+                                                      Utils::Out::outErr("HTTP accept 错误: " + ec.message());
+                                                  }
 
-                            // 等待100ms后尝试重新接受，避免出错时空转把 CPU 打满
-                            auto timer =
-                                std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(100));
-                            timer->async_wait(
-                                [this, self, timer](const boost::system::error_code&)
-                                {
-                                    if (httpRunning.load())
-                                    {
-                                        startAccept();
-                                    }
-                                });
-                            return;
-                        }
+                                                  // 等待100ms后尝试重新接受，避免出错时空转把 CPU 打满
+                                                  auto timer = std::make_shared<boost::asio::steady_timer>(
+                                                      ioc, std::chrono::milliseconds(100));
+                                                  timer->async_wait(
+                                                      [this, self, timer](const boost::system::error_code&)
+                                                      {
+                                                          if (httpRunning.load())
+                                                          {
+                                                              startAccept();
+                                                          }
+                                                      });
+                                                  return;
+                                              }
 
-                        // HttpSession 继承自 enable_shared_from_this，必须用 shared_ptr 管理
-                        // 构造函数按值接收 socket，需 std::move(*sock)；
-                        // 第 5 个参数是基类的发送队列上限，HTTP 链路不使用基类发送队列，这里复用同一个上限
-                        auto session = std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut,
-                                                                    maxHttpSendBufLen, maxHttpSendBufLen);
-                        // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
-                        session->offNoDelay();
-                        // 将session放入会话表，由巡检线程统一回收
-                        httpSessions.push_back(session);
-                        // 启动 HTTP 读循环
-                        session->start();
+                                              // HttpSession 继承自 enable_shared_from_this，必须用 shared_ptr 管理
+                                              // 构造函数按值接收 socket，需 std::move(*sock)；
+                                              // 第 5 个参数是基类的发送队列上限，HTTP
+                                              // 链路不使用基类发送队列，这里复用同一个上限
+                                              auto session =
+                                                  std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut,
+                                                                                maxHttpSendBufLen, maxHttpSendBufLen);
+                                              // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
+                                              session->offNoDelay();
+                                              // 将session放入会话表，由巡检线程统一回收
+                                              httpSessions.push_back(session);
+                                              // 启动 HTTP 读循环
+                                              session->start();
 
-                        // 继续接受下一个连接
-                        startAccept();
-                    });
+                                              // 继续接受下一个连接
+                                              startAccept();
+                                          });
             }
 
             /// @brief      巡检线程主体
@@ -632,66 +659,66 @@ namespace Net
                     }
 
                     // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 httpSessions）
-                    boost::asio::post(ioc,
-                                      [this, self]()
-                                      {
-                                          // 逐个会话检查
-                                          for (auto& it : httpSessions)
-                                          {
-                                              if (!it)
-                                              {
-                                                  continue;
-                                              }
+                    boost::asio::post(
+                        ioc,
+                        [this, self]()
+                        {
+                            // 逐个会话检查
+                            for (auto& it : httpSessions)
+                            {
+                                if (!it)
+                                {
+                                    continue;
+                                }
 
-                                              // 正在等业务回包的会话不能按空闲超时杀掉：业务可能只是慢
-                                              if (it->busing() || it->isClosed())
-                                              {
-                                                  continue;
-                                              }
+                                // 正在等业务回包的会话不能按空闲超时杀掉：业务可能只是慢
+                                if (it->busing() || it->isClosed())
+                                {
+                                    continue;
+                                }
 
-                                              if (!it->timeOut())
-                                              {
-                                                  continue;
-                                              }
+                                if (!it->timeOut())
+                                {
+                                    continue;
+                                }
 
-                                              try
-                                              {
-                                                  // 标记「回完就关」，再回一条 408（写出完成后由回调关闭连接）
-                                                  it->markCloseAfterReply();
+                                try
+                                {
+                                    // 标记「回完就关」，再回一条 408（写出完成后由回调关闭连接）
+                                    it->markCloseAfterReply();
 
-                                                  // 回不出去（上一条响应还卡在 socket 里没写完）→ 直接断，
-                                                  // 否则这条连接会永远留在会话表里
-                                                  if (!it->httpReplay(ErrorBody("request timeout"),
-                                                                      http::status::request_timeout))
-                                                  {
-                                                      it->closeSession();
-                                                  }
-                                              }
-                                              catch (const std::exception& e)
-                                              {
-                                                  Utils::Out::outErr("HTTP 空闲超时回包失败：" + std::string(e.what()));
-                                                  it->closeSession();
-                                              }
-                                              catch (...)
-                                              {
-                                                  Utils::Out::outErr("HTTP 空闲超时回包出现未知错误");
-                                                  it->closeSession();
-                                              }
-                                          }
+                                    // 回不出去（上一条响应还卡在 socket 里没写完）→ 直接断，
+                                    // 否则这条连接会永远留在会话表里
+                                    if (!it->httpReplay(ErrorBody("request timeout"), http::status::request_timeout))
+                                    {
+                                        it->closeSession();
+                                    }
+                                }
+                                catch (const std::exception& e)
+                                {
+                                    Utils::Out::outErr("HTTP 空闲超时回包失败：" + std::string(e.what()));
+                                    it->closeSession();
+                                }
+                                catch (...)
+                                {
+                                    Utils::Out::outErr("HTTP 空闲超时回包出现未知错误");
+                                    it->closeSession();
+                                }
+                            }
 
-                                          // 检查是否关闭
-                                          for (auto iter = httpSessions.begin(); iter != httpSessions.end();)
-                                          {
-                                              if (!(*iter) || (*iter)->isClosed())
-                                              {
-                                                  // 避免悬空的迭代器
-                                                  iter = httpSessions.erase(iter);
-                                                  // 避免后面自增
-                                                  continue;
-                                              }
-                                              ++iter;
-                                          }
-                                      });
+                            // 检查是否关闭
+                            for (auto iter = httpSessions.begin(); iter != httpSessions.end();)
+                            {
+                                if (!(*iter) || (*iter)->isClosed())
+                                {
+                                    // 避免悬空的迭代器
+                                    iter = httpSessions.erase(iter);
+                                    // 避免后面自增
+                                    continue;
+                                }
+                                ++iter;
+                            }
+                        });
                 }
             }
 
