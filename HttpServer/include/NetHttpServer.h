@@ -302,6 +302,9 @@ namespace Net
                 /// @details 巡检线程按 httpCheckTime 周期等待；stop() 时 notify_all 立即唤醒它退出
                 /// @note
                 std::condition_variable queueHttpCV;
+
+                /// @brief 标记此服务是否已经启动过了
+                std::atomic<bool> startingHttp = false;
             };
         } // namespace HttpServer
     } // namespace Server

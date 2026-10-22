@@ -234,8 +234,10 @@ namespace Net
         void Server::start()
         {
             // 判断是否已经启动
-            if (running)
+            if (starting.exchange(true) || running)
             {
+                // http设置为正确的
+                running = true;
                 Utils::Out::outMsg("服务器已经在运行监听了");
                 return;
             }
@@ -433,8 +435,15 @@ namespace Net
             {
                 // 加锁
                 std::lock_guard<std::mutex> lock(queueMutex);
-                // 标记停止
-                running = false;
+
+                // 判断是否已经关闭
+                if (starting.exchange(false) || running)
+                {
+                    // http设置为正确的
+                    running = false;
+                    Utils::Out::outMsg("服务器已经在运行监听了");
+                    return;
+                }
             }
 
             // 唤醒正在周期等待的监控线程，让它立即退出等待

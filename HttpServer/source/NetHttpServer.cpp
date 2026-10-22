@@ -503,8 +503,10 @@ namespace Net
             void HttpServer::start()
             {
                 // 判断是否已经启动
-                if (httpRunning)
+                if (startingHttp.exchange(true) || httpRunning)
                 {
+                    // http设置为正确的
+                    httpRunning = true;
                     Utils::Out::outMsg("HTTP 服务器已经在运行监听了");
                     return;
                 }
@@ -548,6 +550,7 @@ namespace Net
                     {
                         httpClearSessionThread.join();
                     }
+
                     // 继续向上抛出异常
                     throw;
                 }
@@ -731,8 +734,14 @@ namespace Net
                 {
                     // 加锁
                     std::lock_guard<std::mutex> lock(queueHttpMutex);
-                    // 标记停止
-                    httpRunning.store(false);
+                    // 判断是否已经关闭
+                    if (startingHttp.exchange(false) || httpRunning)
+                    {
+                        // http设置为正确的
+                        httpRunning = false;
+                        Utils::Out::outMsg("服务器已经在运行监听了");
+                        return;
+                    }
                 }
 
                 // 唤醒正在周期等待的巡检线程，让它立即退出等待
