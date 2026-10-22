@@ -100,12 +100,19 @@ namespace Net
         /// @param[in] msg 消息序列化字符串
         /// @warning    禁止在回调或事件循环中长时间阻塞；msg 为空时只打印错误日志并丢弃
         /// @note
-        void Session::reply(unsigned long long msg_id, const std::string& msg)
+        bool Session::reply(unsigned long long msg_id, const std::string& msg)
         {
             if (msg.empty())
             {
                 Utils::Out::outErr("消息为空或者消息id错误");
                 return;
+            }
+
+            if (msg.size() > static_cast<std::size_t>(MAX_LENGTH))
+            {
+                Utils::Out::outErr("消息过长（" + std::to_string(msg.size()) + " > " + std::to_string(MAX_LENGTH) +
+                                   "），已丢弃");
+                return false;
             }
 
             Utils::Out::outMsg("正在发送回复数据");

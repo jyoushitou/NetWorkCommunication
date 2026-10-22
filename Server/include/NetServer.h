@@ -74,7 +74,7 @@ namespace Net
             /// @param[in] msg 消息序列化字符串
             /// @warning    禁止在回调或事件循环中长时间阻塞；msg 为空时只打印错误日志并丢弃
             /// @note
-            void reply(unsigned long long msg_id, const std::string& msg);
+            bool reply(unsigned long long msg_id, const std::string& msg);
 
             /// @brief      关闭函数
             /// @details    置位停止标志并走基类的优雅关闭（先把发送队列发完再断开）
