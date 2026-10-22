@@ -464,6 +464,8 @@ namespace Net
 
                 httpRunning.store(false);
 
+                httpAcceptorConnectionCount = 0;
+
                 Utils::Out::outMsg("HTTP 服务器初始化完成");
             }
 
@@ -576,54 +578,70 @@ namespace Net
                 auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
 
                 // 异步等待并接受新连接
-                httpAcceptor.async_accept(*sock,
-                                          [this, self, sock](boost::system::error_code ec)
-                                          {
-                                              // 服务器已停止：acceptor 被主动关闭导致的取消错误是正常退出流程的一部分
-                                              if (!httpRunning.load())
-                                              {
-                                                  return;
-                                              }
+                httpAcceptor.async_accept(
+                    *sock,
+                    [this, self, sock](boost::system::error_code ec)
+                    {
+                        // 服务器已停止：acceptor 被主动关闭导致的取消错误是正常退出流程的一部分
+                        if (!httpRunning.load())
+                        {
+                            return;
+                        }
 
-                                              if (ec)
-                                              {
-                                                  // 主动关闭监听器引发的取消：正常退出，不必刷错误日志
-                                                  if (ec != boost::asio::error::operation_aborted)
-                                                  {
-                                                      Utils::Out::outErr("HTTP accept 错误: " + ec.message());
-                                                  }
+                        if (ec)
+                        {
+                            // 主动关闭监听器引发的取消：正常退出，不必刷错误日志
+                            if (ec != boost::asio::error::operation_aborted)
+                            {
+                                if (ec == boost::asio::error::bad_descriptor)
+                                {
+                                    Utils::Out::outErr("HTTP 监听器已失效，停止 accept：" + ec.message());
+                                    {
+                                        std::lock_guard<std::mutex> lock(queueHttpMutex);
+                                        httpRunning.store(false);
+                                    }
+                                    // 唤醒监控线程
+                                    queueHttpCV.notify_all();
+                                    return;
+                                }
+                                Utils::Out::outErr("HTTP accept 错误: " + ec.message());
+                            }
 
-                                                  // 等待100ms后尝试重新接受，避免出错时空转把 CPU 打满
-                                                  auto timer = std::make_shared<boost::asio::steady_timer>(
-                                                      ioc, std::chrono::milliseconds(100));
-                                                  timer->async_wait(
-                                                      [this, self, timer](const boost::system::error_code&)
-                                                      {
-                                                          if (httpRunning.load())
-                                                          {
-                                                              startAccept();
-                                                          }
-                                                      });
-                                                  return;
-                                              }
+                            // 记录重试次数
+                            httpAcceptorConnectionCount++;
+                            const unsigned shift = (std::min)(httpAcceptorConnectionCount, 6u);
+                            const long long delayMs = (std::min)(5000LL, 100LL << shift);
 
-                                              // HttpSession 继承自 enable_shared_from_this，必须用 shared_ptr 管理
-                                              // 构造函数按值接收 socket，需 std::move(*sock)；
-                                              // 第 5 个参数是基类的发送队列上限，HTTP
-                                              // 链路不使用基类发送队列，这里复用同一个上限
-                                              auto session =
-                                                  std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut,
-                                                                                maxHttpSendBufLen, maxHttpSendBufLen);
-                                              // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
-                                              session->offNoDelay();
-                                              // 将session放入会话表，由巡检线程统一回收
-                                              httpSessions.push_back(session);
-                                              // 启动 HTTP 读循环
-                                              session->start();
+                            // 等待100ms后尝试重新接受，避免出错时空转把 CPU 打满
+                            auto timer =
+                                std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(100));
+                            timer->async_wait(
+                                [this, self, timer](const boost::system::error_code&)
+                                {
+                                    if (httpRunning.load())
+                                    {
+                                        startAccept();
+                                    }
+                                });
+                            return;
+                        }
 
-                                              // 继续接受下一个连接
-                                              startAccept();
-                                          });
+                        // HttpSession 继承自 enable_shared_from_this，必须用 shared_ptr 管理
+                        // 构造函数按值接收 socket，需 std::move(*sock)；
+                        // 第 5 个参数是基类的发送队列上限，HTTP
+                        // 链路不使用基类发送队列，这里复用同一个上限
+                        auto session = std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut,
+                                                                     maxHttpSendBufLen, maxHttpSendBufLen);
+                        // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
+                        session->offNoDelay();
+                        // 将session放入会话表，由巡检线程统一回收
+                        httpSessions.push_back(session);
+                        // 启动 HTTP 读循环
+                        session->start();
+
+                        // 继续接受下一个连接
+                        startAccept();
+                    });
             }
 
             /// @brief      巡检线程主体

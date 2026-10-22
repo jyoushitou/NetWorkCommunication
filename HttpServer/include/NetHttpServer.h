@@ -251,7 +251,7 @@ namespace Net
 
             private:
                 /// @brief 连接Http的acceptor
-                /// @param ec 错误码
+                /// @param[out] ec 错误码
                 /// @return
                 bool openHttpAcceptor(boost::system::error_code ec);
 
@@ -310,6 +310,9 @@ namespace Net
 
                 /// @brief 标记此服务是否已经启动过了
                 std::atomic<bool> startingHttp = false;
+
+                /// @brief httpAcceptor重连错误
+                unsigned int httpAcceptorConnectionCount = 0;
             };
         } // namespace HttpServer
     } // namespace Server
