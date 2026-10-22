@@ -34,10 +34,6 @@ namespace Net
         /// @note
         namespace HttpServer
         {
-            namespace beast = boost::beast;
-            namespace http = boost::beast::http;
-            namespace net = boost::asio;
-
             /// @brief 存储一次请求的上下文
             /// @details 名字沿用历史（最早只放 url）；路由删掉之后，这里只保留协议层信息：
             ///          方法、目标、版本、请求体、复用意愿
@@ -117,7 +113,8 @@ namespace Net
                 /// @note       每条请求只回一次包，重复调用会被丢弃；
                 ///             请求体没读完时不会复用连接（提前拒绝也走这里）。
                 ///             返回 false 时调用方可以据此关掉卡住的连接（空闲巡检就是这么做的）
-                bool httpReplay(const std::string& body, http::status st = http::status::ok);
+                bool httpReplay(const std::string& body,
+                                boost::beast::http::status st = boost::beast::http::status::ok);
 
                 /// @brief      线程安全地发送响应
                 /// @details    任意线程均可调用，内部 post 到 IO 线程执行；
@@ -172,10 +169,10 @@ namespace Net
                 std::shared_ptr<HttpSession> getSession();
 
                 /// @brief 请求解析器（每条请求重建，避免上一条请求的状态残留）
-                std::unique_ptr<http::request_parser<http::string_body>> parser;
+                std::unique_ptr<boost::beast::http::request_parser<boost::beast::http::string_body>> parser;
 
                 /// @brief 读缓冲（跟随连接复用，保存半包与多读的字节，任何时候都不要手动清空）
-                beast::flat_buffer buffer;
+                boost::beast::flat_buffer buffer;
 
                 /// @brief 是否正在处理请求（避免巡检线程误杀正在等待业务返回的会话）
                 std::atomic<bool> busy = false;
@@ -250,10 +247,8 @@ namespace Net
                 void stop() override;
 
             private:
-                /// @brief 连接Http的acceptor
-                /// @param[out] ec 错误码
-                /// @return
-                bool openHttpAcceptor(boost::system::error_code ec);
+                /// @brief 关闭所有的Http
+                void closeHttpAll();
 
                 /// @brief      发起一次异步 accept
                 /// @details    成功则创建会话、放进会话表并启动读循环；无论成败都会续接下一次 accept
@@ -267,12 +262,6 @@ namespace Net
                 /// @warning    在独立线程中运行，禁止直接访问只在 IO 线程内读写的 httpSessions
                 /// @note       每轮都通过 selfWeak 取保活指针，取不到说明 HttpServer 已析构，直接退出
                 void clearHttpSession();
-
-                /// @brief 关闭监听器与全部会话并清空会话表
-                /// @details 只在 IO 线程内（或 IO 线程已经停止的析构阶段）调用
-                /// @warning 会直接清空 httpSessions，调用前须确认没有别的线程在读它
-                /// @note 幂等
-                void closeAll();
 
                 /// @brief HTTP 监听器
                 boost::asio::ip::tcp::acceptor httpAcceptor;

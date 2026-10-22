@@ -79,7 +79,7 @@ namespace Net
 
                 // HTTP/1.1 默认 Keep-Alive：每条请求处理完后可能要复用本连接继续读下一条，
                 // 这里把解析器重置为初始状态（重新 make_unique，任何 Boost 版本都兼容）
-                parser = std::make_unique<http::request_parser<http::string_body>>();
+                parser = std::make_unique<boost::beast::http::request_parser<boost::beast::http::string_body>>();
                 parser->body_limit(maxHttpSendBufLen);   // 请求体上限，超了会得到 body_limit 错误
                 parser->header_limit(maxHttpSendBufLen); // 请求头上限，超了会得到 header_limit 错误
 
@@ -99,59 +99,62 @@ namespace Net
                 auto self = getSession();
 
                 // 两段式读取的第一段：只读到请求头结束，此时 body 还没有读
-                http::async_read_header(socket, buffer, *parser,
-                                        [self](boost::system::error_code ec, std::size_t)
-                                        {
-                                            // 期间已经进入关闭流程（空闲超时 / 服务器 stop）：结果不再有意义
-                                            if (self->isClosed())
-                                            {
-                                                return;
-                                            }
+                boost::beast::http::async_read_header(socket, buffer, *parser,
+                                                      [self](boost::system::error_code ec, std::size_t)
+                                                      {
+                                                          // 期间已经进入关闭流程（空闲超时 / 服务器
+                                                          // stop）：结果不再有意义
+                                                          if (self->isClosed())
+                                                          {
+                                                              return;
+                                                          }
 
-                                            // 对端在 keep-alive 空闲期正常关闭，不是错误
-                                            if (ec == http::error::end_of_stream)
-                                            {
-                                                self->closeSession();
-                                                return;
-                                            }
+                                                          // 对端在 keep-alive 空闲期正常关闭，不是错误
+                                                          if (ec == boost::beast::http::error::end_of_stream)
+                                                          {
+                                                              self->closeSession();
+                                                              return;
+                                                          }
 
-                                            // 主动关闭 socket 引发的取消：正常退出流程的一部分，静默返回
-                                            if (ec == boost::asio::error::operation_aborted)
-                                            {
-                                                return;
-                                            }
+                                                          // 主动关闭 socket 引发的取消：正常退出流程的一部分，静默返回
+                                                          if (ec == boost::asio::error::operation_aborted)
+                                                          {
+                                                              return;
+                                                          }
 
-                                            // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
-                                            if (ec)
-                                            {
-                                                Utils::Out::outErr("HTTP 读取请求头失败：" + ec.message());
-                                                self->errCloseSession();
-                                                return;
-                                            }
+                                                          // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
+                                                          if (ec)
+                                                          {
+                                                              Utils::Out::outErr("HTTP 读取请求头失败：" +
+                                                                                 ec.message());
+                                                              self->errCloseSession();
+                                                              return;
+                                                          }
 
-                                            // 把请求头里的信息落到上下文里（业务层只认 Url）
-                                            // 注意：method_string() / target() 返回 beast 的 string_view，
-                                            // 不能直接拿去构造 std::string（不同 Boost 版本不保证可转换），
-                                            // 统一用 assign(指针, 长度) 复制
-                                            auto& req = self->parser->get();
-                                            const auto methodView = req.method_string();
-                                            const auto targetView = req.target();
-                                            self->url.method.assign(methodView.data(), methodView.size());
-                                            self->url.target.assign(targetView.data(), targetView.size());
-                                            self->url.version = req.version();
-                                            self->url.keep_alive = req.keep_alive();
-                                            self->updateTime();
+                                                          // 把请求头里的信息落到上下文里（业务层只认 Url）
+                                                          // 注意：method_string() / target() 返回 beast 的
+                                                          // string_view， 不能直接拿去构造 std::string（不同 Boost
+                                                          // 版本不保证可转换）， 统一用 assign(指针, 长度) 复制
+                                                          auto& req = self->parser->get();
+                                                          const auto methodView = req.method_string();
+                                                          const auto targetView = req.target();
+                                                          self->url.method.assign(methodView.data(), methodView.size());
+                                                          self->url.target.assign(targetView.data(), targetView.size());
+                                                          self->url.version = req.version();
+                                                          self->url.keep_alive = req.keep_alive();
+                                                          self->updateTime();
 
-                                            // 没有 body（GET、Content-Length: 0）→ 直接进业务
-                                            if (self->parser->is_done())
-                                            {
-                                                self->handleToWork();
-                                                return;
-                                            }
+                                                          // 没有 body（GET、Content-Length: 0）→ 直接进业务
+                                                          if (self->parser->is_done())
+                                                          {
+                                                              self->handleToWork();
+                                                              return;
+                                                          }
 
-                                            // 有 body（Content-Length > 0 或 Transfer-Encoding: chunked）→ 继续读
-                                            self->readBody();
-                                        });
+                                                          // 有 body（Content-Length > 0 或 Transfer-Encoding:
+                                                          // chunked）→ 继续读
+                                                          self->readBody();
+                                                      });
             }
 
             /// @brief      读取消息体
@@ -166,50 +169,50 @@ namespace Net
                 auto self = getSession();
 
                 // 读取http body
-                http::async_read(socket, buffer, *parser,
-                                 [self](boost::system::error_code ec, std::size_t)
-                                 {
-                                     // 期间已经进入关闭流程：结果不再有意义
-                                     if (self->isClosed())
-                                     {
-                                         return;
-                                     }
+                boost::beast::http::async_read(socket, buffer, *parser,
+                                               [self](boost::system::error_code ec, std::size_t)
+                                               {
+                                                   // 期间已经进入关闭流程：结果不再有意义
+                                                   if (self->isClosed())
+                                                   {
+                                                       return;
+                                                   }
 
-                                     // 请求体超过 parser->body_limit()：剩余 body 还在流里，只能回 413 后断开
-                                     // （parser->is_done() 为 false，httpReplay 会自动不复用连接）
-                                     if (ec == http::error::body_limit)
-                                     {
-                                         Utils::Out::outErr("HTTP 请求体超过上限，返回 413");
-                                         self->httpReplay(ErrorBody("payload too large"),
-                                                          http::status::payload_too_large);
-                                         return;
-                                     }
+                                                   // 请求体超过 parser->body_limit()：剩余 body 还在流里，只能回 413
+                                                   // 后断开 （parser->is_done() 为 false，httpReplay 会自动不复用连接）
+                                                   if (ec == boost::beast::http::error::body_limit)
+                                                   {
+                                                       Utils::Out::outErr("HTTP 请求体超过上限，返回 413");
+                                                       self->httpReplay(ErrorBody("payload too large"),
+                                                                        boost::beast::http::status::payload_too_large);
+                                                       return;
+                                                   }
 
-                                     // 对端在发 body 的过程中正常关闭
-                                     if (ec == http::error::end_of_stream)
-                                     {
-                                         self->closeSession();
-                                         return;
-                                     }
+                                                   // 对端在发 body 的过程中正常关闭
+                                                   if (ec == boost::beast::http::error::end_of_stream)
+                                                   {
+                                                       self->closeSession();
+                                                       return;
+                                                   }
 
-                                     // 主动关闭 socket 引发的取消：正常退出流程的一部分，静默返回
-                                     if (ec == boost::asio::error::operation_aborted)
-                                     {
-                                         return;
-                                     }
+                                                   // 主动关闭 socket 引发的取消：正常退出流程的一部分，静默返回
+                                                   if (ec == boost::asio::error::operation_aborted)
+                                                   {
+                                                       return;
+                                                   }
 
-                                     if (ec)
-                                     {
-                                         Utils::Out::outErr("HTTP 读取请求体失败：" + ec.message());
-                                         self->errCloseSession();
-                                         return;
-                                     }
+                                                   if (ec)
+                                                   {
+                                                       Utils::Out::outErr("HTTP 读取请求体失败：" + ec.message());
+                                                       self->errCloseSession();
+                                                       return;
+                                                   }
 
-                                     // chunked 已由 Beast 解码，这里拿到的是完整明文
-                                     self->url.body = self->parser->get().body();
-                                     self->updateTime();
-                                     self->handleToWork();
-                                 });
+                                                   // chunked 已由 Beast 解码，这里拿到的是完整明文
+                                                   self->url.body = self->parser->get().body();
+                                                   self->updateTime();
+                                                   self->handleToWork();
+                                               });
             }
 
             /// @brief      处理请求
@@ -226,7 +229,7 @@ namespace Net
                 if (HHF == nullptr)
                 {
                     Utils::Out::outErr("未设置 HTTP 业务回调函数，返回 500");
-                    httpReplay(ErrorBody("handler not set"), http::status::internal_server_error);
+                    httpReplay(ErrorBody("handler not set"), boost::beast::http::status::internal_server_error);
                     return;
                 }
 
@@ -239,12 +242,12 @@ namespace Net
                 {
                     Utils::Out::outErr("HTTP 业务回调抛出异常：" + std::string(e.what()));
                     // 若业务已经先回过一次包，httpReplay 内部的 replied 判定会丢弃这次重复响应
-                    httpReplay(ErrorBody("internal error"), http::status::internal_server_error);
+                    httpReplay(ErrorBody("internal error"), boost::beast::http::status::internal_server_error);
                 }
                 catch (...)
                 {
                     Utils::Out::outErr("HTTP 业务回调抛出未知异常");
-                    httpReplay(ErrorBody("internal error"), http::status::internal_server_error);
+                    httpReplay(ErrorBody("internal error"), boost::beast::http::status::internal_server_error);
                 }
 
                 // 回调返回后这里不再做任何事：
@@ -259,7 +262,7 @@ namespace Net
             /// @param[in] st 状态码
             /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
             /// @warning    每条请求只回一次包：重复调用会把两条响应拼到同一条流上，报文会直接乱掉
-            bool HttpSession::httpReplay(const std::string& body, http::status st)
+            bool HttpSession::httpReplay(const std::string& body, boost::beast::http::status st)
             {
                 // 一条请求只允许写出一条响应报文
                 if (replied.exchange(true))
@@ -274,11 +277,12 @@ namespace Net
 
                 // 报文对象必须活到写完成，用 shared_ptr 交给 lambda 持有；
                 // 版本回显请求的版本，HTTP/1.0 的客户端不认 1.1 的默认复用语义
-                auto res = std::make_shared<http::response<http::string_body>>(st, url.version ? url.version : 11);
+                auto res = std::make_shared<boost::beast::http::response<boost::beast::http::string_body>>(
+                    st, url.version ? url.version : 11);
 
                 // 构建报文
-                res->set(http::field::server, "CommonNetHttpServer");
-                res->set(http::field::content_type, "application/json; charset=utf-8");
+                res->set(boost::beast::http::field::server, "CommonNetHttpServer");
+                res->set(boost::beast::http::field::content_type, "application/json; charset=utf-8");
                 // 允许跨域：前端（Vue / React）直连本服务时需要
                 res->set("Access-Control-Allow-Origin", "*");
                 res->set("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -298,36 +302,36 @@ namespace Net
                 // 保活：报文对象与自身都要活到写完成
                 auto self = getSession();
 
-                http::async_write(socket, *res,
-                                  [self, res](boost::system::error_code ec, std::size_t)
-                                  {
-                                      // 无论成功还是失败，这条请求到这里都处理完了
-                                      self->busy.store(false, std::memory_order_relaxed);
-                                      self->updateTime();
+                boost::beast::http::async_write(socket, *res,
+                                                [self, res](boost::system::error_code ec, std::size_t)
+                                                {
+                                                    // 无论成功还是失败，这条请求到这里都处理完了
+                                                    self->busy.store(false, std::memory_order_relaxed);
+                                                    self->updateTime();
 
-                                      if (ec)
-                                      {
-                                          Utils::Out::outErr("HTTP 发送响应失败：" + ec.message());
-                                          self->errCloseSession();
-                                          return;
-                                      }
+                                                    if (ec)
+                                                    {
+                                                        Utils::Out::outErr("HTTP 发送响应失败：" + ec.message());
+                                                        self->errCloseSession();
+                                                        return;
+                                                    }
 
-                                      // 报文里说了不复用（或客户端要求关闭）→ 关连接
-                                      if (!res->keep_alive())
-                                      {
-                                          self->closeSession();
-                                          return;
-                                      }
+                                                    // 报文里说了不复用（或客户端要求关闭）→ 关连接
+                                                    if (!res->keep_alive())
+                                                    {
+                                                        self->closeSession();
+                                                        return;
+                                                    }
 
-                                      // 关闭流程可能在本响应写出期间被触发（空闲巡检 / 服务器 stop）
-                                      if (self->isClosed())
-                                      {
-                                          return;
-                                      }
+                                                    // 关闭流程可能在本响应写出期间被触发（空闲巡检 / 服务器 stop）
+                                                    if (self->isClosed())
+                                                    {
+                                                        return;
+                                                    }
 
-                                      // 复用连接：继续读下一条请求
-                                      self->start();
-                                  });
+                                                    // 复用连接：继续读下一条请求
+                                                    self->start();
+                                                });
 
                 // 报文已经交给 socket，剩下的由写完成回调推进
                 return true;
@@ -518,7 +522,7 @@ namespace Net
 
                 // 尝试连接
                 boost::system::error_code ec;
-                if (!openHttpAcceptor(ec))
+                if (!openAcceptor(ec))
                 {
                     throw boost::system::system_error(ec, "Server监听失败");
                 }
@@ -676,66 +680,66 @@ namespace Net
                     }
 
                     // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 httpSessions）
-                    boost::asio::post(
-                        ioc,
-                        [this, self]()
-                        {
-                            // 逐个会话检查
-                            for (auto& it : httpSessions)
-                            {
-                                if (!it)
-                                {
-                                    continue;
-                                }
+                    boost::asio::post(ioc,
+                                      [this, self]()
+                                      {
+                                          // 逐个会话检查
+                                          for (auto& it : httpSessions)
+                                          {
+                                              if (!it)
+                                              {
+                                                  continue;
+                                              }
 
-                                // 正在等业务回包的会话不能按空闲超时杀掉：业务可能只是慢
-                                if (it->busing() || it->isClosed())
-                                {
-                                    continue;
-                                }
+                                              // 正在等业务回包的会话不能按空闲超时杀掉：业务可能只是慢
+                                              if (it->busing() || it->isClosed())
+                                              {
+                                                  continue;
+                                              }
 
-                                if (!it->timeOut())
-                                {
-                                    continue;
-                                }
+                                              if (!it->timeOut())
+                                              {
+                                                  continue;
+                                              }
 
-                                try
-                                {
-                                    // 标记「回完就关」，再回一条 408（写出完成后由回调关闭连接）
-                                    it->markCloseAfterReply();
+                                              try
+                                              {
+                                                  // 标记「回完就关」，再回一条 408（写出完成后由回调关闭连接）
+                                                  it->markCloseAfterReply();
 
-                                    // 回不出去（上一条响应还卡在 socket 里没写完）→ 直接断，
-                                    // 否则这条连接会永远留在会话表里
-                                    if (!it->httpReplay(ErrorBody("request timeout"), http::status::request_timeout))
-                                    {
-                                        it->closeSession();
-                                    }
-                                }
-                                catch (const std::exception& e)
-                                {
-                                    Utils::Out::outErr("HTTP 空闲超时回包失败：" + std::string(e.what()));
-                                    it->closeSession();
-                                }
-                                catch (...)
-                                {
-                                    Utils::Out::outErr("HTTP 空闲超时回包出现未知错误");
-                                    it->closeSession();
-                                }
-                            }
+                                                  // 回不出去（上一条响应还卡在 socket 里没写完）→ 直接断，
+                                                  // 否则这条连接会永远留在会话表里
+                                                  if (!it->httpReplay(ErrorBody("request timeout"),
+                                                                      boost::beast::http::status::request_timeout))
+                                                  {
+                                                      it->closeSession();
+                                                  }
+                                              }
+                                              catch (const std::exception& e)
+                                              {
+                                                  Utils::Out::outErr("HTTP 空闲超时回包失败：" + std::string(e.what()));
+                                                  it->closeSession();
+                                              }
+                                              catch (...)
+                                              {
+                                                  Utils::Out::outErr("HTTP 空闲超时回包出现未知错误");
+                                                  it->closeSession();
+                                              }
+                                          }
 
-                            // 检查是否关闭
-                            for (auto iter = httpSessions.begin(); iter != httpSessions.end();)
-                            {
-                                if (!(*iter) || (*iter)->isClosed())
-                                {
-                                    // 避免悬空的迭代器
-                                    iter = httpSessions.erase(iter);
-                                    // 避免后面自增
-                                    continue;
-                                }
-                                ++iter;
-                            }
-                        });
+                                          // 检查是否关闭
+                                          for (auto iter = httpSessions.begin(); iter != httpSessions.end();)
+                                          {
+                                              if (!(*iter) || (*iter)->isClosed())
+                                              {
+                                                  // 避免悬空的迭代器
+                                                  iter = httpSessions.erase(iter);
+                                                  // 避免后面自增
+                                                  continue;
+                                              }
+                                              ++iter;
+                                          }
+                                      });
                 }
             }
 
@@ -779,7 +783,7 @@ namespace Net
             /// @details 关闭 acceptor 后逐个通知会话关闭，最后清空会话表
             /// @warning 只能在 IO 线程内调用（析构阶段除外：那时 IO 线程已经不再运行）
             /// @note 幂等
-            void HttpServer::closeAll()
+            void HttpServer::closeHttpAll()
             {
                 // 关闭 acceptor，不再接受新连接
                 boost::system::error_code ec;

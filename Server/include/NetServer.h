@@ -212,7 +212,9 @@ namespace Net
             /// @note       仅在 IO 线程内读写
             std::vector<std::shared_ptr<Session>> sessions;
 
-        private:
+            /// @brief 监听节点
+            boost::asio::ip::tcp::endpoint ep;
+
             /// @brief 关闭监听器与全部会话并清空会话表
             /// @warning 只能在 IO 线程内调用；**例外**：析构阶段 / ioc.stopped() 时
             ///          （那时 IO 线程不跑了，也不会有别的线程动 sessions）
@@ -224,6 +226,7 @@ namespace Net
             /// @return 返回连接的状态
             bool openAcceptor(boost::system::error_code ec);
 
+        private:
             /// @brief      开始接受连接
             /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
             ///             为每个新连接创建 Session（关闭 NoDelay）后继续接受下一个连接
@@ -279,9 +282,6 @@ namespace Net
 
             /// @brief 标记此服务是否已经启动过了
             std::atomic<bool> starting = false;
-
-            /// @brief 监听节点
-            boost::asio::ip::tcp::endpoint ep;
 
             unsigned int acceptorConnectionCount = 0;
         };
