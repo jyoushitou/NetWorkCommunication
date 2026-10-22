@@ -125,6 +125,16 @@ namespace Net
             stopToClose();
         }
 
+        /// @brief 同步硬关闭（不清队列、不等待）
+        /// @warning **只在 IO 线程已停止时使用**（析构阶段 / ioc.stopped()）
+        /// @note 内部走基类 errToClose()，幂等
+        void Session::closeHard()
+        {
+            stop.store(true);
+            // 错误的关闭
+            errToClose();
+        }
+
         /// @brief 重写关闭最后的流程
         /// @details 用于在session最后关闭时销毁其他动态数据
         /// @warning 当前是空实现：Session 没有需要额外释放的动态资源
@@ -199,7 +209,11 @@ namespace Net
                 Utils::Out::outErr("maxSendBufLen 非法，已回退为默认1024*1024*10");
             }
 
+            // 将运行状态初始化
             running = false;
+
+            // 初始化连接状态
+            acceptorConnectionCount = 0;
 
             Utils::Out::outMsg("服务器对象初始化完成");
         }
@@ -318,6 +332,38 @@ namespace Net
             }
         }
 
+        /// @brief 关闭监听器与全部会话并清空会话表
+        /// @warning 只能在 IO 线程内调用；**例外**：析构阶段 / ioc.stopped() 时
+        ///          （那时 IO 线程不跑了，也不会有别的线程动 sessions）
+        void Server::closeAll()
+        {
+            // 尝试关闭acceptor
+            boost::system::error_code ec;
+            acceptor.close(ec);
+
+            // IO 线程不会再执行任何 handler
+            const bool ioDead = ioc.stopped();
+            // 单独通知每个session
+            for (auto& session : sessions)
+            {
+                if (!session)
+                {
+                    continue;
+                }
+                if (ioDead)
+                {
+                    session->closeHard();
+                }
+                else
+                {
+                    session->closeSession();
+                }
+            }
+
+            // 清空队列
+            sessions.clear();
+        }
+
         /// @brief      开始接受连接
         /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
         ///             为每个新连接创建对应的 Session（关闭 NoDelay）后继续接受下一个连接
@@ -358,11 +404,31 @@ namespace Net
                         // 启动读（继承自 Connection::start()）
                         session->start();
 
+                        this->acceptorConnectionCount = 0;
                         // 继续接受下一个连接
                         startAccept();
                     }
                     else
                     {
+                        // 由自身引起的
+                        if (ec == boost::asio::error::operation_aborted)
+                        {
+                            return;
+                        }
+
+                        //  监听器已废：重试一万次也不会成功，直接停机
+                        if (ec == boost::asio::error::bad_descriptor)
+                        {
+                            Utils::Out::outErr("监听器已失效，停止 accept：" + ec.message());
+                            {
+                                std::lock_guard<std::mutex> lock(queueMutex);
+                                running.store(false);
+                                starting.store(false);
+                            }
+                            // 唤醒监控线程清理所有
+                            queueCV.notify_all();
+                            return;
+                        }
                         // 仅在服务器仍在运行时，才输出真正的 accept 错误
                         Utils::Out::outErr("accept 错误: " + ec.what());
 
@@ -371,14 +437,23 @@ namespace Net
                             return;
                         }
 
+                        acceptorConnectionCount++;
+
+                        const unsigned shift = (std::min)(acceptorConnectionCount, 6u);
+                        const long long delayMs = (std::min)(5000LL, 100LL << shift);
+
                         // 等待100ms后尝试重新连接
                         auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(100));
                         timer->async_wait(
-                            [this, self, timer](const boost::system::error_code&)
+                            [this, self, timer](const boost::system::error_code& waitEC)
                             {
-                                if (running)
+                                if (!waitEC || running)
                                 {
                                     startAccept();
+                                }
+                                else
+                                {
+                                    return;
                                 }
                             });
                     }

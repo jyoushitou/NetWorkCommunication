@@ -95,6 +95,11 @@ namespace Net
             /// @note       由服务器监控线程在 IO 线程内调用
             bool timeOut();
 
+            /// @brief 同步硬关闭（不清队列、不等待）
+            /// @warning **只在 IO 线程已停止时使用**（析构阶段 / ioc.stopped()）
+            /// @note 内部走基类 errToClose()，幂等
+            void closeHard();
+
         protected:
             /// @brief      业务处理
             /// @details    收到消息后的具体业务实现，由基类回调触发：内容为 kCloseCommand 时关闭会话，
@@ -208,6 +213,11 @@ namespace Net
             std::vector<std::shared_ptr<Session>> sessions;
 
         private:
+            /// @brief 关闭监听器与全部会话并清空会话表
+            /// @warning 只能在 IO 线程内调用；**例外**：析构阶段 / ioc.stopped() 时
+            ///          （那时 IO 线程不跑了，也不会有别的线程动 sessions）
+            void closeAll();
+
             /// @brief 打开Acceptor
             /// @details 为了支持重启的重连
             /// @param[out] ec 错误码
@@ -272,6 +282,8 @@ namespace Net
 
             /// @brief 监听节点
             boost::asio::ip::tcp::endpoint ep;
+
+            unsigned int acceptorConnectionCount = 0;
         };
     } // namespace Server
 } // namespace Net
