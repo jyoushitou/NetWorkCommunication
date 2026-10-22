@@ -472,6 +472,12 @@ namespace Net
             /// @note       基类 Server 的析构随后自动执行（其中会再调一次基类 stop()，幂等且无副作用）
             HttpServer::~HttpServer()
             {
+                // 判断session现在连接数，不影响正常析构
+                if (!sessions.empty())
+                {
+                    Utils::Out::outErr("HttpSessions仍有" + std::to_string(sessions.size()) + "个会话未关闭");
+                }
+
                 // 先触发停止：置 httpRunning=false 并关闭 acceptor / 会话
                 // 析构阶段 selfWeak 已经 lock 不到指针，stop() 内部会走同步关闭分支
                 stop();

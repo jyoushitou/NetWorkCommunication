@@ -240,6 +240,12 @@ namespace Net
         /// @note       派生类析构会自动调用基类析构；join 后可避免 std::thread 析构时 std::terminate
         Server::~Server()
         {
+            // 判断session现在连接数，不影响正常析构
+            if (!sessions.empty())
+            {
+                Utils::Out::outErr("Sessions仍有" + std::to_string(sessions.size()) + "个会话未关闭");
+            }
+
             // 先触发停止：置 running=false 并关闭 acceptor / 会话
             stop();
 
