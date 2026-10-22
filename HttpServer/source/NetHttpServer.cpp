@@ -432,7 +432,6 @@ namespace Net
                 : Server(io, boost::asio::ip::tcp::endpoint(ep.address(), 0), HF, timeOut, checkTime, maxSendBufLen),
                   httpAcceptor(io)
             {
-
                 // 设置HHF回调
                 this->HHF = HHF;
 
@@ -512,6 +511,13 @@ namespace Net
                 {
                     Utils::Out::outErr("HTTP 监听器已关闭，无法重启；请重新构造 HttpServer 对象");
                     return;
+                }
+
+                // 尝试连接
+                boost::system::error_code ec;
+                if (!openHttpAcceptor(ec))
+                {
+                    throw boost::system::system_error(ec, "Server监听失败");
                 }
 
                 // 将运行状态置为true

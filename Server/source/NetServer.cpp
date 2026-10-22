@@ -178,13 +178,6 @@ namespace Net
                        std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime, int maxSendBufLen)
             : ioc(io), acceptor(io)
         {
-            // 尝试连接
-            boost::system::error_code ec;
-            if (!openAcceptor(ec))
-            {
-                throw boost::system::system_error(ec, "Server监听失败");
-            }
-
             // 给智能指针赋值
             this->HF = HF;
 
@@ -208,7 +201,7 @@ namespace Net
 
             running = false;
 
-            Utils::Out::outMsg("服务器初始化完成");
+            Utils::Out::outMsg("服务器对象初始化完成");
         }
 
         bool Server::openAcceptor(boost::system::error_code ec)
@@ -277,6 +270,13 @@ namespace Net
             if (clearSessionThread.joinable())
             {
                 clearSessionThread.join();
+            }
+
+            // 尝试连接
+            boost::system::error_code ec;
+            if (!openAcceptor(ec))
+            {
+                throw boost::system::system_error(ec, "Server监听失败");
             }
 
             // 置运行运行状态
