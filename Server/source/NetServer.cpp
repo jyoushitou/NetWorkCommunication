@@ -178,14 +178,13 @@ namespace Net
                        std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime, int maxSendBufLen)
             : ioc(io), acceptor(io)
         {
-            // 打开连接
-            acceptor.open(ep.protocol());
-            // 设置
-            acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
-            // 绑定ep
-            acceptor.bind(ep);
-            // 监听
-            acceptor.listen();
+            // 尝试连接
+            boost::system::error_code ec;
+            if (!openAcceptor(ec))
+            {
+                throw boost::system::system_error(ec, "Server监听失败");
+            }
+
             // 给智能指针赋值
             this->HF = HF;
 
@@ -210,6 +209,37 @@ namespace Net
             running = false;
 
             Utils::Out::outMsg("服务器初始化完成");
+        }
+
+        bool Server::openAcceptor(boost::system::error_code ec)
+        {
+            if (acceptor.is_open())
+            {
+                ec.clear();
+                return true;
+            }
+
+            acceptor.open(ep.protocol(), ec);
+            if (ec)
+            {
+                return false;
+            }
+            acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
+            if (ec)
+            {
+                return false;
+            }
+            acceptor.bind(ep, ec);
+            if (ec)
+            {
+                return false;
+            }
+            acceptor.listen(boost::asio::socket_base::max_listen_connections, ec);
+            if (ec)
+            {
+                return false;
+            }
+            return true;
         }
 
         /// @brief      析构函数

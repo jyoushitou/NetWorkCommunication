@@ -250,6 +250,11 @@ namespace Net
                 void stop();
 
             private:
+                /// @brief 连接Http的acceptor
+                /// @param ec 错误码
+                /// @return
+                bool openHttpAcceptor(boost::system::error_code ec);
+
                 /// @brief      发起一次异步 accept
                 /// @details    成功则创建会话、放进会话表并启动读循环；无论成败都会续接下一次 accept
                 /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略

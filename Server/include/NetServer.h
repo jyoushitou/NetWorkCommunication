@@ -208,6 +208,12 @@ namespace Net
             std::vector<std::shared_ptr<Session>> sessions;
 
         private:
+            /// @brief 打开Acceptor
+            /// @details 为了支持重启的重连
+            /// @param[out] ec 错误码
+            /// @return 返回连接的状态
+            bool openAcceptor(boost::system::error_code ec);
+
             /// @brief      开始接受连接
             /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
             ///             为每个新连接创建 Session（关闭 NoDelay）后继续接受下一个连接
@@ -263,6 +269,9 @@ namespace Net
 
             /// @brief 标记此服务是否已经启动过了
             std::atomic<bool> starting = false;
+
+            /// @brief 监听节点
+            boost::asio::ip::tcp::endpoint ep;
         };
     } // namespace Server
 } // namespace Net

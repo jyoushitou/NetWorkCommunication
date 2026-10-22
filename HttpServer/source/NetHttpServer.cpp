@@ -432,17 +432,6 @@ namespace Net
                 : Server(io, boost::asio::ip::tcp::endpoint(ep.address(), 0), HF, timeOut, checkTime, maxSendBufLen),
                   httpAcceptor(io)
             {
-                // 打开监听器（协议跟随 epHttp，IPv4 / IPv6 都支持）
-                httpAcceptor.open(epHttp.protocol());
-
-                // 端口复用：进程重启时不会因为 TIME_WAIT 报「Address already in use」
-                httpAcceptor.set_option(boost::asio::socket_base::reuse_address(true));
-
-                // 绑定ep
-                httpAcceptor.bind(epHttp);
-
-                // 监听ep
-                httpAcceptor.listen(boost::asio::socket_base::max_listen_connections);
 
                 // 设置HHF回调
                 this->HHF = HHF;
