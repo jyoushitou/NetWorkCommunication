@@ -55,12 +55,6 @@ namespace Net
             // 获得自身指针
             auto self = getSession();
 
-            if (self == nullptr)
-            {
-                Utils::Out::outErr("会话自身强引用获取失败（对象非 shared_ptr 持有），丢弃本条消息");
-                return;
-            }
-
             if (msg == kCloseCommand)
             {
                 // 收到退出信号
@@ -381,13 +375,14 @@ namespace Net
             // 保活 Server 自身
             auto self = shared_from_this();
 
-            // 创建一个 socket 用于 accept
-            auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
-
-            if (!self || !running.load())
+            // 判断运行条件
+            if (!running.load())
             {
                 return;
             }
+
+            // 创建一个 socket 用于 accept
+            auto sock = std::make_shared<boost::asio::ip::tcp::socket>(ioc);
 
             // 异步等待并接受新连接
             acceptor.async_accept(
