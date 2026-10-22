@@ -406,11 +406,18 @@ namespace Net
                 Session::closeSession();
             }
 
+            /// @brief 出错关闭的实际执行体
+            void HttpSession::closeWithError()
+            {
+                Session::errToClose();
+            }
+
             /// @brief 错误的关闭连接
             /// @details 走基类的出错关闭：直接清空并关闭，不等队列发完
             void HttpSession::errCloseSession()
             {
-                Session::errToClose();
+                auto self = getSession();
+                boost::asio::post(socket.get_executor(), [self]() { self->closeWithError(); });
             }
 
             //========== HttpServer ==========

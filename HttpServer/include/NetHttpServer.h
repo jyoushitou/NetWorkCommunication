@@ -137,16 +137,17 @@ namespace Net
                 /// @note
                 void closeSession() override;
 
+                /// @brief  是否在忙（正在处理请求，含等待业务异步回包、响应写出中）
+                /// @return 忙返回 true
+                /// @note   供空闲巡检判断，避免误杀正在等业务回包的会话
+                bool busing() const;
+
+            protected:
                 /// @brief 错误的关闭连接
                 /// @details 走基类的出错关闭（不等发送队列，直接断开）
                 /// @warning 线程安全（内部 post 到 IO 线程）
                 /// @note
                 void errCloseSession();
-
-                /// @brief  是否在忙（正在处理请求，含等待业务异步回包、响应写出中）
-                /// @return 忙返回 true
-                /// @note   供空闲巡检判断，避免误杀正在等业务回包的会话
-                bool busing() const;
 
             private:
                 /// @brief      处理请求
@@ -161,6 +162,9 @@ namespace Net
                 ///             chunked 请求根本没有这个头
                 /// @note       仅 IO 线程内调用
                 void readBody();
+
+                /// @brief 出错关闭的实际执行体
+                void closeWithError();
 
                 /// @brief 获得自身指针
                 /// @return 返回自己的共享指针
