@@ -177,13 +177,13 @@ namespace Net
             /// @details 置 running、绑定 selfWeak，随后启动监控线程（clearSession）并开始 accept
             /// @warning 会启动一个监控线程；调用者必须已经用 shared_ptr 持有本对象
             /// @note 幂等：已在运行时只打印提示；Stop() 后重启会先回收上一轮的监控线程
-            void start();
+            virtual void start();
 
             /// @brief      停止服务器
             /// @details    置 running=false 并 notify_all 唤醒监控线程，再 post 到 IO 线程关闭 acceptor、逐个关闭会话
             /// @warning    调用后服务器不再接受新连接，须重新构造使用
             /// @note       幂等，可重复调用
-            void stop();
+            virtual void stop();
 
         protected:
             /// @brief      所属的 io_context

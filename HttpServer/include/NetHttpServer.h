@@ -241,13 +241,13 @@ namespace Net
                 ///          避免有人误启动基类「二进制协议」的 accept 循环
                 /// @warning 调用者必须已经用 shared_ptr 持有本对象
                 /// @note    幂等：已在运行时只打印提示；stop() 后重启会先 join 掉上一轮的巡检线程
-                void start();
+                void start() override;
 
                 /// @brief      停止服务
                 /// @details    置停止标志并 notify 唤醒巡检线程，再 post 到 IO 线程关闭监听器与全部会话
                 /// @warning    调用后服务器不再接受新连接，须重新构造使用
                 /// @note       幂等，可重复调用
-                void stop();
+                void stop() override;
 
             private:
                 /// @brief 连接Http的acceptor
