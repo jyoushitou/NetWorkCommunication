@@ -24,11 +24,6 @@ namespace Net
         {
             namespace
             {
-                /// @brief HTTP 请求头 / 请求体的默认上限（字节）
-                /// @details 构造函数收到非正数时回退为该值（10MB）
-                /// @note
-                constexpr int kDefaultMaxHttpBufLen = 1024 * 1024 * 10;
-
                 /// @brief 构造一个最小的 JSON 错误体
                 /// @param[in] msg 错误描述
                 /// @return 形如 {"code":1,"msg":"..."} 的字符串
@@ -64,7 +59,7 @@ namespace Net
                 {
                     Utils::Out::outErr("maxHttpSendBufLen 非法，已回退为默认1024*1024*10");
                 }
-                this->maxHttpSendBufLen = (maxHttpSendBufLen > 0) ? maxHttpSendBufLen : kDefaultMaxHttpBufLen;
+                this->maxHttpSendBufLen = (maxHttpSendBufLen > 0) ? maxHttpSendBufLen : 1024 * 1024 * 10;
 
                 // 创建时立即记录活动时间，防止刚建好就被巡检误判为空闲
                 updateTime();
@@ -454,7 +449,7 @@ namespace Net
                 }
 
                 // 初始化每个 session 的请求头 / 请求体上限（非正数回退为 10MB）
-                this->maxHttpSendBufLen = (maxHttpSendBufLen > 0) ? maxHttpSendBufLen : kDefaultMaxHttpBufLen;
+                this->maxHttpSendBufLen = (maxHttpSendBufLen > 0) ? maxHttpSendBufLen : 1024 * 1024 * 10;
 
                 // 判断maxHttpSendBufLen是否合法
                 if (maxHttpSendBufLen <= 0)
