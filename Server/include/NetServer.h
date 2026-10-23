@@ -14,7 +14,6 @@
 #include <functional>
 #include <atomic>
 #include <thread>
-#include <tuple> // 本文件未直接使用（历史遗留：WaitForMessage / msgQueue 已移除，该包含可删除）
 #include <ctime> // time_t（Session::lastTime）
 
 #include <boost/asio.hpp>
@@ -81,8 +80,8 @@ namespace Net
             /// @details    线程安全的发送入口（内部 post 到 IO 线程），向该客户端回复一条消息
             /// @param[in] msg_id 消息全局唯一ID
             /// @param[in] msg 消息序列化字符串
-            /// @warning    禁止在回调或事件循环中长时间阻塞；msg 为空时只打印错误日志并丢弃
-            /// @note
+            /// @warning    禁止在回调或事件循环中长时间阻塞；msg 为空或超过 MAX_LENGTH 时返回 false
+            /// @note       返回 false 表示未受理（空消息 / 超长），调用方可据此记日志
             bool reply(unsigned long long msg_id, const std::string& msg);
 
             /// @brief      关闭函数
@@ -101,7 +100,7 @@ namespace Net
             /// @brief      判断是否超时
             /// @details    以最后一次活动时间 lastTime 为基准，与 timeout 比较
             /// @return     true超时，false未超时
-            /// @note       由服务器监控线程在 IO 线程内调用
+            /// @note       由巡检线程 post 到 IO 线程后调用
             bool timeOut();
 
             /// @brief 同步硬关闭（不清队列、不等待）
@@ -282,7 +281,7 @@ namespace Net
             /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
             ///             为每个新连接创建 Session（关闭 NoDelay）后继续接受下一个连接
             /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略
-            /// @note       accept 失败时等 100ms 重试，服务器已停止则不再重试
+            /// @note       accept 失败时按指数退避重试（上限 5s），服务器已停止则不再重试
             void startAccept();
 
             /// @brief      监控线程主体

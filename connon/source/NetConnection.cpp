@@ -616,8 +616,8 @@ namespace Net
     /// @details    把消息封装为发送任务（12 字节消息头 + 消息体）并加入发送队列，线程安全，可在外部线程调用
     /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] msg 消息序列化字符串
-    /// @warning    队列积压（queueBufLen + 本条消息体长度）超过 maxSendBufLen 时，在 IO 线程内抛出
-    /// std::invalid_argument
+    /// @warning    队列积压（queueBufLen + 本条消息体长度）超过 maxSendBufLen 时，丢弃本条消息并记日志；
+    ///             **绝不在 IO 线程的 handler 里抛异常**（会冲出 io_context::run()）
     /// @note       任务 post 到 IO 线程执行，实际入队与发送都在 IO 线程内完成
     void Connection::send(unsigned long long msg_id, std::string msg)
     {

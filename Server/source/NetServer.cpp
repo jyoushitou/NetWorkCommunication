@@ -434,7 +434,7 @@ namespace Net
         /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
         ///             为每个新连接创建对应的 Session（关闭 NoDelay）后继续接受下一个连接
         /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略
-        /// @note       accept 失败时等 100ms 重试，服务器已停止则不再重试
+        /// @note       accept 失败时按指数退避重试（上限 5s），服务器已停止则不再重试
         void Server::startAccept()
         {
             // 保活 Server 自身
