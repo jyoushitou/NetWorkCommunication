@@ -189,8 +189,8 @@ namespace Net::Server::HttpServer
         /// @brief 请求体的长度上限
         int maxHttpSendBufLen = 0;
 
-        /// @brief 记录请求头的长度
-        int maxHttpHeadLen = 1024 * 1;
+        /// @brief 记录请求头的长度上限（默认 8KB；请求头正常只有 1~2KB）
+        int maxHttpHeadLen = 1024 * 8;
 
         /// @brief 该发送的请求
         std::atomic<unsigned long long> reqSeq{0};
@@ -229,7 +229,7 @@ namespace Net::Server::HttpServer
                    std::shared_ptr<HandleFunction> HF = nullptr, long long timeOut = 60, long long httpTimeOut = 60,
                    long long checkTime = 60, long long httpCheckTime = 60, int maxSendBufLen = 1024 * 1024 * 10,
                    int maxHttpSendBufLen = 1024 * 1024 * 10, long long sessionTimeOut = 60,
-                   long long httpSessionTimeOut = 60, int maxHttpHeaderLen = 1024 * 3);
+                   long long httpSessionTimeOut = 60, int maxHttpHeaderLen = 1024 * 8);
 
         /// @brief 析构函数
         /// @details 置停止标志、关闭监听器与全部会话，再 join 巡检线程
@@ -294,8 +294,8 @@ namespace Net::Server::HttpServer
         /// @brief 记录每个 http session的请求体上限（字节，非正数时回退为 10MB）
         int maxHttpSendBufLen = 0;
 
-        /// @brief 记录每个 http session的请求体上限（字节，非正数时回退为 1KB）
-        int maxHttpHeaderLen = 1024 * 1;
+        /// @brief 记录每个 http session的请求体上限（字节，非正数时回退为 8KB）
+        int maxHttpHeaderLen = 1024 * 8;
 
         /// @brief 记录当前的运行状态
         std::atomic<bool> httpRunning = false;

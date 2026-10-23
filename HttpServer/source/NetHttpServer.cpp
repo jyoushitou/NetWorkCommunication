@@ -57,6 +57,9 @@ namespace Net::Server::HttpServer
         }
         this->maxHttpSendBufLen = (maxHttpSendBufLen > 0) ? maxHttpSendBufLen : 1024 * 1024 * 10;
 
+        // 请求头上限（非正数回退为 8KB）：原来这里漏了赋值，header_limit 一直用成员默认值
+        this->maxHttpHeadLen = (maxHttpHeaderLen > 0) ? maxHttpHeaderLen : 1024 * 8;
+
         // 创建时立即记录活动时间，防止刚建好就被巡检误判为空闲
         updateTime();
     }
@@ -492,9 +495,9 @@ namespace Net::Server::HttpServer
             Utils::Out::outErr("httpTimeOut / httpCheckTime 非法，已回退为默认 60 秒");
         }
 
-        // 初始化每个 session 的请求头 / 请求体上限（非正数回退为 10MB）
+        // 初始化每个 session 的请求头 / 请求体上限
         this->maxHttpSendBufLen = (maxHttpSendBufLen > 0) ? maxHttpSendBufLen : 1024 * 1024 * 10;
-        this->maxHttpHeaderLen = (maxHttpHeaderLen > 0) ? maxHttpHeaderLen : 1024 * 1;
+        this->maxHttpHeaderLen = (maxHttpHeaderLen > 0) ? maxHttpHeaderLen : 1024 * 8;
 
         // 判断maxHttpSendBufLen是否合法
         if (maxHttpSendBufLen <= 0)
