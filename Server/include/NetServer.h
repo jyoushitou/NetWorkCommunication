@@ -100,6 +100,16 @@ namespace Net
             /// @note 内部走基类 errToClose()，幂等
             void closeHard();
 
+            /// @brief  是否在忙（正在处理请求，含等待业务异步回包、响应写出中）
+            /// @return 忙返回 true
+            /// @note   供空闲巡检判断，避免误杀正在等业务回包的会话
+            bool busing() const;
+
+            /// @brief 忙状态是否已超过上限（仅在 IO 线程调用）
+            /// @param limitSec 当前时间
+            /// @return
+            bool busyTimedOut(long long limitSec) const;
+
         protected:
             /// @brief      业务处理
             /// @details    收到消息后的具体业务实现，由基类回调触发：内容为 kCloseCommand 时关闭会话，
@@ -120,6 +130,9 @@ namespace Net
             /// @warning 当前是空实现：Session 没有需要额外释放的动态资源
             /// @note 由基类 socketClose() 保证只回调一次
             void derivedToClose() override;
+
+            /// @brief 是否正在处理请求（避免巡检线程误杀正在等待业务返回的会话）
+            std::atomic<bool> busy = false;
 
         private:
             // 将tosend函数降级为保护
@@ -149,6 +162,10 @@ namespace Net
             /// @details 标识该会话是否已被请求关闭（由 closeSession 置位）
             /// @note
             std::atomic<bool> stop = false;
+
+            /// @brief 进入忙时状态的时刻
+            /// @details 采用原子事件
+            std::atomic<time_t> busySince = 0;
         };
 
         /// @brief      服务器端
@@ -171,7 +188,7 @@ namespace Net
             /// @note
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
                    std::shared_ptr<HandleFunction> HF = nullptr, long long timeOut = 60, long long checkTime = 60,
-                   int maxSendBufLen = 1024 * 1024 * 10);
+                   int maxSendBufLen = 1024 * 1024 * 10, long long sessionTimeOut = 60);
 
             /// @brief      析构函数
             /// @details    先 stop() 停服并关闭所有会话，再 join 监控线程
@@ -283,7 +300,11 @@ namespace Net
             /// @brief 标记此服务是否已经启动过了
             std::atomic<bool> starting = false;
 
+            /// @brief 记录重试次数
             unsigned int acceptorConnectionCount = 0;
+
+            /// @brief 记录会话忙时回包等待时间
+            long long sessionTimeOut = 60;
         };
     } // namespace Server
 } // namespace Net

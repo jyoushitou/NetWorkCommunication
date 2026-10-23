@@ -137,11 +137,6 @@ namespace Net
                 /// @note
                 void closeSession() override;
 
-                /// @brief  是否在忙（正在处理请求，含等待业务异步回包、响应写出中）
-                /// @return 忙返回 true
-                /// @note   供空闲巡检判断，避免误杀正在等业务回包的会话
-                bool busing() const;
-
             protected:
                 /// @brief 错误的关闭连接
                 /// @details 走基类的出错关闭（不等发送队列，直接断开）
@@ -177,9 +172,6 @@ namespace Net
 
                 /// @brief 读缓冲（跟随连接复用，保存半包与多读的字节，任何时候都不要手动清空）
                 boost::beast::flat_buffer buffer;
-
-                /// @brief 是否正在处理请求（避免巡检线程误杀正在等待业务返回的会话）
-                std::atomic<bool> busy = false;
 
                 /// @brief 本条请求是否已经回过包
                 /// @details 一条请求只允许写出一条响应报文：重复写会把两条响应拼到同一条流上
@@ -230,7 +222,8 @@ namespace Net
                            boost::asio::ip::tcp::endpoint epHttp, std::shared_ptr<HttpHandleFunction> HHF = nullptr,
                            std::shared_ptr<HandleFunction> HF = nullptr, long long timeOut = 60,
                            long long httpTimeOut = 60, long long checkTime = 60, long long httpCheckTime = 60,
-                           int maxSendBufLen = 1024 * 1024 * 10, int maxHttpSendBufLen = 1024 * 1024 * 10);
+                           int maxSendBufLen = 1024 * 1024 * 10, int maxHttpSendBufLen = 1024 * 1024 * 10,
+                           long long sessionTimeOut = 60, long long httpSessionTimeOut = 60);
 
                 /// @brief 析构函数
                 /// @details 置停止标志、关闭监听器与全部会话，再 join 巡检线程
@@ -306,6 +299,9 @@ namespace Net
 
                 /// @brief httpAcceptor重连错误
                 unsigned int httpAcceptorConnectionCount = 0;
+
+                /// @brief 记录忙时的时间，超时自动踢
+                long long httpSessionTimeOut = 60;
             };
         } // namespace HttpServer
     } // namespace Server

@@ -173,6 +173,28 @@ namespace Net
             return stop.load() || closing.load() || !socket.is_open();
         }
 
+        /// @brief  是否在忙（正在处理请求，含等待业务异步回包）
+        /// @return 忙返回 true
+        /// @note   供空闲巡检判断，避免误杀正在等业务回包的会话
+        bool Session::busing() const
+        {
+            return busy.load(std::memory_order_relaxed);
+        }
+
+        /// @brief 忙状态是否已超过上限（仅在 IO 线程调用）
+        /// @param limitSec 当前时间
+        /// @return
+        bool Session::busyTimedOut(long long limitSec) const
+        {
+            // 判断是否在非忙时候
+            if (!busy.load(std::memory_order_relaxed))
+            {
+                return false;
+            }
+            // 判断是否超时
+            return busySince != 0 && Utils::Time::computeTime(busySince) > limitSec;
+        }
+
         //===Server===
 
         /// @brief      构造函数
@@ -186,7 +208,8 @@ namespace Net
         /// @warning    须保证 io 的生命周期长于本服务器；非正数入参会回退为默认值（60 / 60 / 10MB）并打印错误日志
         /// @note
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
-                       std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime, int maxSendBufLen)
+                       std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime, int maxSendBufLen,
+                       long long sessionTimeOut)
             : ioc(io), acceptor(io)
         {
             // 给智能指针赋值
@@ -203,6 +226,8 @@ namespace Net
 
             // 初始化每个 session 的发送队列上限（非正数回退为 10MB）
             this->maxSendBufLen = maxSendBufLen ? maxSendBufLen : 1024 * 1024 * 10;
+
+            this->sessionTimeOut = sessionTimeOut;
 
             // 判断maxSendBufLen是否合法
             if (maxSendBufLen <= 0)
@@ -505,6 +530,19 @@ namespace Net
                                       { // 判断是否超时
                                           if (it->timeOut() && !it->isClosed())
                                           {
+                                              if (it->busing())
+                                              {
+                                                  if (it->busyTimedOut(sessionTimeOut))
+                                                  {
+                                                      Utils::Out::outErr("回包时间过长");
+                                                      if (it->reply(1, "bussing timeout"))
+                                                      {
+                                                          it->closeSession();
+                                                      }
+                                                  }
+                                                  continue;
+                                              }
+
                                               try
                                               {
                                                   // 回复提醒消息

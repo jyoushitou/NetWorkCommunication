@@ -381,14 +381,6 @@ namespace Net
                 closeAfterReply.store(true, std::memory_order_relaxed);
             }
 
-            /// @brief  是否在忙（正在处理请求，含等待业务异步回包）
-            /// @return 忙返回 true
-            /// @note   供空闲巡检判断，避免误杀正在等业务回包的会话
-            bool HttpSession::busing() const
-            {
-                return busy.load(std::memory_order_relaxed);
-            }
-
             /// @brief 获得自身指针
             /// @return 返回自己的共享指针（static_pointer_cast 不做运行时校验，正常不会为空）
             /// @warning 仅在对象由 shared_ptr 持有时可用
@@ -434,8 +426,9 @@ namespace Net
                                    boost::asio::ip::tcp::endpoint epHttp, std::shared_ptr<HttpHandleFunction> HHF,
                                    std::shared_ptr<HandleFunction> HF, long long timeOut, long long httpTimeOut,
                                    long long checkTime, long long httpCheckTime, int maxSendBufLen,
-                                   int maxHttpSendBufLen)
-                : Server(io, boost::asio::ip::tcp::endpoint(ep.address(), 0), HF, timeOut, checkTime, maxSendBufLen),
+                                   int maxHttpSendBufLen, long long sessionTimeOut, long long httpSessionTimeOut)
+                : Server(io, boost::asio::ip::tcp::endpoint(ep.address(), 0), HF, timeOut, checkTime, maxSendBufLen,
+                         sessionTimeOut),
                   httpAcceptor(io)
             {
                 // 设置HHF回调
@@ -452,6 +445,9 @@ namespace Net
 
                 // 设置巡检时间
                 this->httpCheckTime = (httpCheckTime > 0) ? httpCheckTime : 60;
+
+                // 设置会话忙时最多超时挨踢时间
+                this->httpSessionTimeOut = httpSessionTimeOut;
 
                 // 判断httpTimeOut、httpCheckTime是否合法
                 if (httpTimeOut <= 0 || httpCheckTime <= 0)
@@ -687,66 +683,77 @@ namespace Net
                     }
 
                     // post 到 io_context，在 IO 线程内清理失效会话（避免跨线程直接改 httpSessions）
-                    boost::asio::post(ioc,
-                                      [this, self]()
-                                      {
-                                          // 逐个会话检查
-                                          for (auto& it : httpSessions)
-                                          {
-                                              if (!it)
-                                              {
-                                                  continue;
-                                              }
+                    boost::asio::post(
+                        ioc,
+                        [this, self]()
+                        {
+                            // 逐个会话检查
+                            for (auto& it : httpSessions)
+                            {
+                                if (!it)
+                                {
+                                    continue;
+                                }
 
-                                              // 正在等业务回包的会话不能按空闲超时杀掉：业务可能只是慢
-                                              if (it->busing() || it->isClosed())
-                                              {
-                                                  continue;
-                                              }
+                                // 正在等业务回包的会话不能按空闲超时杀掉：业务可能只是慢但是不能无限期等待
+                                if (it->busing())
+                                {
+                                    if (it->busyTimedOut(httpSessionTimeOut))
+                                    {
+                                        Utils::Out::outErr("HTTP 会话等待业务回包超时，返回503");
+                                        it->markCloseAfterReply();
+                                        if (!it->httpReplay(ErrorBody("busing timeout"),
+                                                            boost::beast::http::status::service_unavailable))
+                                        {
+                                            it->closeSession();
+                                        }
+                                    }
+                                    continue;
+                                }
 
-                                              if (!it->timeOut())
-                                              {
-                                                  continue;
-                                              }
+                                if (!it->timeOut())
+                                {
+                                    continue;
+                                }
 
-                                              try
-                                              {
-                                                  // 标记「回完就关」，再回一条 408（写出完成后由回调关闭连接）
-                                                  it->markCloseAfterReply();
+                                try
+                                {
+                                    // 标记「回完就关」，再回一条 408（写出完成后由回调关闭连接）
+                                    it->markCloseAfterReply();
 
-                                                  // 回不出去（上一条响应还卡在 socket 里没写完）→ 直接断，
-                                                  // 否则这条连接会永远留在会话表里
-                                                  if (!it->httpReplay(ErrorBody("request timeout"),
-                                                                      boost::beast::http::status::request_timeout))
-                                                  {
-                                                      it->closeSession();
-                                                  }
-                                              }
-                                              catch (const std::exception& e)
-                                              {
-                                                  Utils::Out::outErr("HTTP 空闲超时回包失败：" + std::string(e.what()));
-                                                  it->closeSession();
-                                              }
-                                              catch (...)
-                                              {
-                                                  Utils::Out::outErr("HTTP 空闲超时回包出现未知错误");
-                                                  it->closeSession();
-                                              }
-                                          }
+                                    // 回不出去（上一条响应还卡在 socket 里没写完）→ 直接断，
+                                    // 否则这条连接会永远留在会话表里
+                                    if (!it->httpReplay(ErrorBody("request timeout"),
+                                                        boost::beast::http::status::request_timeout))
+                                    {
+                                        it->closeSession();
+                                    }
+                                }
+                                catch (const std::exception& e)
+                                {
+                                    Utils::Out::outErr("HTTP 空闲超时回包失败：" + std::string(e.what()));
+                                    it->closeSession();
+                                }
+                                catch (...)
+                                {
+                                    Utils::Out::outErr("HTTP 空闲超时回包出现未知错误");
+                                    it->closeSession();
+                                }
+                            }
 
-                                          // 检查是否关闭
-                                          for (auto iter = httpSessions.begin(); iter != httpSessions.end();)
-                                          {
-                                              if (!(*iter) || (*iter)->isClosed())
-                                              {
-                                                  // 避免悬空的迭代器
-                                                  iter = httpSessions.erase(iter);
-                                                  // 避免后面自增
-                                                  continue;
-                                              }
-                                              ++iter;
-                                          }
-                                      });
+                            // 检查是否关闭
+                            for (auto iter = httpSessions.begin(); iter != httpSessions.end();)
+                            {
+                                if (!(*iter) || (*iter)->isClosed())
+                                {
+                                    // 避免悬空的迭代器
+                                    iter = httpSessions.erase(iter);
+                                    // 避免后面自增
+                                    continue;
+                                }
+                                ++iter;
+                            }
+                        });
                 }
             }
 
