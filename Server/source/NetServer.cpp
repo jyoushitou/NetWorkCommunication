@@ -33,8 +33,12 @@ namespace Net
             stop = false;
             // 给回调函数赋值
             this->HF = HF;
-            // timeout 为 0 时回退为默认 60 秒
-            this->timeout = timeout ? timeout : 60;
+            // 非正数（含负数）回退为默认 60 秒：负数会让 timeOut() 恒为真，会话一进巡检就被秒关
+            if (timeout <= 0)
+            {
+                Utils::Out::outErr("timeout 非法（" + std::to_string(timeout) + "），已回退为默认 60 秒");
+            }
+            this->timeout = (timeout > 0) ? timeout : 60;
 
             // 初始化时间
             updateTime();
@@ -226,16 +230,14 @@ namespace Net
                 Utils::Out::outErr("timeOut / checkTime 非法，已回退为默认 60 秒");
             }
 
-            // 初始化每个 session 的发送队列上限（非正数回退为 10MB）
-            this->maxSendBufLen = maxSendBufLen ? maxSendBufLen : 1024 * 1024 * 10;
-
-            this->sessionTimeOut = sessionTimeOut;
-
-            // 判断maxSendBufLen是否合法
+            // 初始化每个 session 的发送队列上限（非正数含负数都回退为 10MB）
             if (maxSendBufLen <= 0)
             {
                 Utils::Out::outErr("maxSendBufLen 非法，已回退为默认1024*1024*10");
             }
+            this->maxSendBufLen = (maxSendBufLen > 0) ? maxSendBufLen : 1024 * 1024 * 10;
+
+            this->sessionTimeOut = sessionTimeOut;
 
             // 将运行状态初始化
             running = false;

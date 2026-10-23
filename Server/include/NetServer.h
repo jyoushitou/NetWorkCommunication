@@ -123,7 +123,7 @@ namespace Net
             /// @brief      更新连接时间
             /// @details    刷新 lastTime，供超时巡检使用，避免空闲连接长期占线
             /// @note       重写基类虚函数；在每次读写操作后由基类调用，也可手动调用
-            void updateTime();
+            void updateTime() override;
 
             /// @brief 重写关闭最后的流程
             /// @details 用于在session最后关闭时销毁其他动态数据
@@ -156,7 +156,7 @@ namespace Net
             /// @brief 最后更新时间
             /// @details 记录最后一次读写活动的时间戳（秒），timeOut() 依据它判断空闲超时
             /// @note
-            std::atomic<time_t> lastTime;
+            std::atomic<time_t> lastTime{0};
 
             /// @brief 停止标志
             /// @details 标识该会话是否已被请求关闭（由 closeSession 置位）
