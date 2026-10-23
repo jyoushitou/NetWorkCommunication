@@ -65,6 +65,9 @@ namespace Net::Server::HttpServer
         // 请求头上限（非正数回退为 8KB）：原来这里漏了赋值，header_limit 一直用成员默认值
         this->maxHttpHeadLen = (maxHttpHeaderLen > 0) ? maxHttpHeaderLen : 1024 * 8;
 
+        // 业务回调：原来漏了这一行，导致 HHF 恒为 nullptr，所有请求都回 500 "handler not set"
+        this->HHF = HF;
+
         // 创建时立即记录活动时间，防止刚建好就被巡检误判为空闲
         updateTime();
     }
