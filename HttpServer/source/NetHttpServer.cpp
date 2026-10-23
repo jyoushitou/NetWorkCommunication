@@ -83,7 +83,9 @@ namespace Net::Server::HttpServer
         // buffer 不能清：里面可能已经缓存了下一条请求的字节（HTTP pipelining）
         url = Url{};
 
-        url.seq = reqSeq.fetch_add(1);
+        // 请求号：++ 返回自增后的值（1、2、3…），必须与 httpAsyncReplay 里的比较口径一致
+        // （原来是 fetch_add(1) 返回旧值 → 每条异步回包都被判成"序号不匹配"）
+        url.seq = ++reqSeq;
 
         // 新请求开始：复位忙标记、「已回包」标记与「回完就关」标记
         busy.store(false, std::memory_order_relaxed);

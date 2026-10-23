@@ -53,8 +53,8 @@ namespace Net::Server::HttpServer
         /// @brief 客户端是否希望复用连接（HTTP/1.1 默认 true）
         bool keep_alive = true;
 
-        /// @brief 本次请求的请求号;
-        unsigned seq = 0;
+        /// @brief 本次请求的请求号（与 httpAsyncReplay 的 seq 参数配对，防止迟到回包串请求）
+        unsigned long long seq = 0;
     };
 
     /// @brief HTTP 会话前向声明
