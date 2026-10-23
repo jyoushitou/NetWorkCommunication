@@ -297,9 +297,6 @@ namespace Net
             /// @details 下发给每个新建 Session 的发送队列积压上限，单位字节（非正数时回退为 10MB）
             int maxSendBufLen = 0;
 
-            /// @brief 标记此服务是否已经启动过了
-            std::atomic<bool> starting = false;
-
             /// @brief 记录重试次数
             unsigned int acceptorConnectionCount = 0;
 

@@ -304,11 +304,9 @@ namespace Net
         /// @note 幂等：已在运行时只打印提示；Stop() 后重启会先 join 掉上一轮的监控线程
         void Server::start()
         {
-            // 判断是否已经启动
-            if (starting.exchange(true) || running)
+            // 判断是否已经启动（幂等：已在运行时只打印提示，绝不能去 join 自己那一轮的线程）
+            if (running.load())
             {
-                // http设置为正确的
-                running = true;
                 Utils::Out::outMsg("服务器已经在运行监听了");
                 return;
             }
@@ -454,7 +452,6 @@ namespace Net
                             {
                                 std::lock_guard<std::mutex> lock(queueMutex);
                                 running.store(false);
-                                starting.store(false);
                             }
                             // 唤醒监控线程清理所有
                             queueCV.notify_all();
@@ -591,14 +588,8 @@ namespace Net
                 // 加锁
                 std::lock_guard<std::mutex> lock(queueMutex);
 
-                // 判断是否已经关闭
-                if (starting.exchange(false) || running)
-                {
-                    // http设置为正确的
-                    running = false;
-                    Utils::Out::outMsg("服务器已经在运行监听了");
-                    return;
-                }
+                // 无条件置停止标志（幂等；这里绝不做任何"闸门"早退，否则关闭动作会被跳过）
+                running = false;
             }
 
             // 唤醒正在周期等待的监控线程，让它立即退出等待
@@ -607,28 +598,15 @@ namespace Net
             // 保活，不保存引用
             auto self = selfWeak.lock();
 
-            if (self == nullptr)
+            // 从未 start() / 正在析构 / IO 线程已停：投递出去也没人执行 → 就地同步关闭
+            if (self == nullptr || ioc.stopped())
             {
+                closeAll();
                 return;
             }
 
-            // post 到 IO 线程执行关闭动作
-            boost::asio::post(ioc,
-                              [this, self]()
-                              {
-                                  // 关闭 acceptor，不再接受新连接
-                                  boost::system::error_code ec;
-                                  acceptor.close(ec);
-
-                                  // 循环通知每个会话关闭（用 size_t 避免有符号/无符号比较告警）
-                                  for (std::size_t i = 0; i < sessions.size(); ++i)
-                                  {
-                                      sessions[i]->closeSession();
-                                  }
-
-                                  // 清理会话
-                                  sessions.clear();
-                              });
+            // post 到 IO 线程执行关闭动作（复用 closeAll，避免两份关闭逻辑漂移）
+            boost::asio::post(ioc, [this, self]() { closeAll(); });
         }
     } // namespace Server
 } // namespace Net
