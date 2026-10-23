@@ -408,6 +408,15 @@ namespace Net::Server::HttpServer
                           });
     }
 
+    /// @brief      兼容接口：按"当前请求"回包
+    /// @details    等价于 httpAsyncReplay(reqSeq, body, 200)，供旧代码/文档里的单参写法使用
+    /// @warning    迟到回包可能被当成下一条请求的响应，新代码请用带 seq 的重载
+    /// @note
+    void HttpSession::httpAsyncReplay(const std::string& body)
+    {
+        httpAsyncReplay(reqSeq.load(std::memory_order_relaxed), body, boost::beast::http::status::ok);
+    }
+
     /// @brief  标记本次响应发完就关闭连接
     /// @details 空闲巡检给超时会话回 408 时使用：既把提示发出去，又保证回完就断开
     /// @note   线程安全（原子标志）

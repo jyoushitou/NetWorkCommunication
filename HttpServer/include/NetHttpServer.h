@@ -124,6 +124,12 @@ namespace Net::Server::HttpServer
         void httpAsyncReplay(unsigned long long seq, const std::string& body,
                              boost::beast::http::status st = boost::beast::http::status::ok);
 
+        /// @brief 兼容接口：按"当前请求"回包（等价于 httpAsyncReplay(reqSeq, body, 200)）
+        /// @param[in] body 响应体（空串会被忽略）
+        /// @warning 迟到回包有串请求风险，新代码请用带 seq 的版本
+        /// @note
+        void httpAsyncReplay(const std::string& body);
+
         /// @brief      标记「本次响应发完就关闭连接」
         /// @details    供服务器空闲巡检使用：既能把 408 之类的报文回给客户端，
         ///             又能保证回完就断开，不会把连接留在半死不活的状态
@@ -137,10 +143,9 @@ namespace Net::Server::HttpServer
         /// @note
         void closeSession() override;
 
-    protected:
         /// @brief 错误的关闭连接
         /// @details 走基类的出错关闭（不等发送队列，直接断开）
-        /// @warning 线程安全（内部 post 到 IO 线程）
+        /// @warning 线程安全（内部 post 到 IO 线程，与实现一致）
         /// @note
         void errCloseSession();
 
