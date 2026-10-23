@@ -10,10 +10,18 @@ endif()  # 策略设置结束
 
 find_dependency(Boost CONFIG COMPONENTS system)  # 递归查找 Boost：下游找到 CommonNet 的同时就得到 Boost::system（asio 是纯头文件，无需组件名）
 
+# HTTP 服务端库（Common::Net::HttpServer）的额外依赖：只有该库被构建并安装时，
+# 导出目标 Common::Net::HttpServer 的接口上才会出现 Boost::beast / Boost::json。
+# 若不在这里找回，下游 include(CommonNetTargets.cmake) 会因这些目标不存在而在
+# generate 阶段报错。开关值由 CMakeLists.txt 在配置期替换进来。
+if(@COMMONNET_HTTP_SERVER_ENABLED@)  # @VAR@ 由 configure_package_config_file 替换为 TRUE / FALSE
+    find_dependency(Boost CONFIG COMPONENTS beast json)  # HTTP 报文解析与 JSON 解析（纯头文件导入目标）
+endif()  # HTTP 服务端库依赖结束
+
 # Utils（本工程的前置依赖库）由 vcpkg 的 utils 端口提供，导入目标 Utils::Utils；
 # Common::Utils / Common::Net::* 的接口上带着它，故必须一并找回
 find_dependency(Utils CONFIG)  # 递归查找 vcpkg 的 utils 包：缺了它，导出的 Common::Utils 会因 Utils::Utils 未定义而导致下游 configure 失败
 
-include("${CMAKE_CURRENT_LIST_DIR}/CommonNetTargets.cmake")  # 载入导出目标（Common::Utils / Common::Net::Core / Server / Client）；必须放在上面两句 find_dependency 之后
+include("${CMAKE_CURRENT_LIST_DIR}/CommonNetTargets.cmake")  # 载入导出目标（Common::Utils / Common::Net::Core / Server / Client，构建了 HTTP 服务端库时还有 HttpServer）；必须放在上面所有 find_dependency 之后
 
 check_required_components(CommonNet)  # 校验下游 COMPONENTS 请求：本包无可选组件，一旦请求组件就把 CommonNet_FOUND 置为假

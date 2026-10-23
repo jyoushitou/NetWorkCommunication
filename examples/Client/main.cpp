@@ -123,7 +123,7 @@ int main()
             {
                 if (cp.client)
                 {
-                    cp.client->Stop();
+                    cp.client->stop();
                 }
             }
         });
@@ -202,7 +202,7 @@ int main()
     {
         if (cp.client)
         {
-            cp.client->Stop();
+            cp.client->stop();
         }
     }
 

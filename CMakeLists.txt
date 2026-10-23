@@ -145,6 +145,7 @@ endif() # 架构校验结束
 
 # ── 构建选项 ────────────────────────────────────────────
 option(COMMONNET_BUILD_EXAMPLES "构建 Server/Client 示例可执行文件" ON) # 默认编译 examples 下的示例，可用 -DCOMMONNET_BUILD_EXAMPLES=OFF 关闭
+option(COMMONNET_BUILD_HTTP_SERVER "构建 HTTP 服务端库 CommonNetHttpServer（在 Server 之上叠加，另需 boost-beast / boost-json）" ON) # 默认构建；该库的外部依赖比其它三个库多，确实不想要时用 -DCOMMONNET_BUILD_HTTP_SERVER=OFF 关掉
 # 库类型由 CMake 内置的 BUILD_SHARED_LIBS 控制（默认未定义 = 静态库），
 # 无需在此声明：用 -DBUILD_SHARED_LIBS=ON 即可切为动态库。
 
@@ -273,6 +274,55 @@ target_link_libraries(CommonNetClient PUBLIC CommonNetCore) # 依赖核心库（
 add_library(Common::Net::Client ALIAS CommonNetClient) # 构建期别名
 set_target_properties(CommonNetClient PROPERTIES EXPORT_NAME Net::Client) # 导出名 Net::Client → 下游即 Common::Net::Client
 
+# ── HTTP 服务端库（依赖服务端库 Server）────────────────────
+# HttpServer 是在 Server 之上叠加的一层 HTTP 服务端，本库只负责通讯：
+#   Net::Server::HttpServer::HttpSession 继承 Net::Server::Session
+#   Net::Server::HttpServer::HttpServer  继承 Net::Server::Server
+# 所以它唯一的库依赖就是 CommonNetServer —— Server 已经 PUBLIC 依赖 Core，Core 又
+# PUBLIC 依赖 Utils，TCP 侧的头文件（NetServer.h / NetConnection.h）与库
+# （CommonNetServer / CommonNetCore / Utils）都会顺着这条链接行自动传递过来，无需重复书写。
+#
+# 除 Server 之外只剩 Boost 一项外部依赖，故用 COMMONNET_BUILD_HTTP_SERVER 单独开关：
+#   boost-beast / boost-json ：HTTP 报文解析与 JSON 解析，属通讯层自身的协议处理。
+#                              两者都是纯头文件库，不会引入链接期依赖，但 vcpkg 必须装了对应端口才有头文件。
+#
+# 本层不做业务序列化，所以不依赖 protobuf：请求体的业务语义（编解码、服务号、命令号等）
+# 一律留给业务层，这一层只负责把 HTTP 报文收发清楚。
+if(COMMONNET_BUILD_HTTP_SERVER) # 开关打开时才定义本库（开关见文件上方的 option 声明）
+
+    # 补齐 Boost 组件：文件上方已按 components system 找过一次，这里追加 beast / json。
+    # 不加 REQUIRED 而是 QUIET + 自检，是为了在缺组件时给出"装哪个 vcpkg 端口"的可操作提示，
+    # 而不是只抛 CMake 自带的 "Could not find a package configuration file"。
+    find_package(Boost CONFIG QUIET COMPONENTS beast json)
+    if(NOT Boost_FOUND)
+        message(FATAL_ERROR
+            "未找到 Boost 的 beast / json 组件（HTTP 服务端库需要）。\n"
+            "请安装依赖：\n"
+            "    vcpkg install boost-beast:x64-windows boost-json:x64-windows\n"
+            "或临时跳过该库：cmake -B build -DCOMMONNET_BUILD_HTTP_SERVER=OFF")
+    endif()
+
+    add_library(CommonNetHttpServer # HTTP 服务端库（默认静态库）
+        HttpServer/source/NetHttpServer.cpp) # 实现文件：HTTP 会话（HttpSession）与 HTTP acceptor（HttpServer）
+    common_net_options(CommonNetHttpServer) # 套用公共属性（C++17 / Windows 宏 / MSVC /MP /FS /utf-8）
+    target_include_directories(CommonNetHttpServer PUBLIC # PUBLIC：NetHttpServer.h 是公开头文件
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/HttpServer/include> # 构建期：源码树里的 HttpServer/include
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/Common/Net/HttpServer>) # 安装后：<prefix>/include/Common/Net/HttpServer
+    target_link_libraries(CommonNetHttpServer PUBLIC # PUBLIC：下面这些依赖全部出现在 NetHttpServer.h 的公开接口上，会随本库传递给下游
+        CommonNetServer # 依赖服务端库（本题要求）：HttpSession/HttpServer 分别继承 Server 的 Session/Server
+        Boost::beast Boost::json) # HTTP 报文与 JSON：纯头文件导入目标，只为下发包含目录
+    add_library(Common::Net::HttpServer ALIAS CommonNetHttpServer) # 构建期别名
+    set_target_properties(CommonNetHttpServer PROPERTIES EXPORT_NAME Net::HttpServer) # 导出名 Net::HttpServer → 下游即 Common::Net::HttpServer
+
+    # 供 CommonNetConfig.cmake.in 在生成期判断：下游包是否需要连带 find_dependency 上面这项额外依赖
+    set(COMMONNET_HTTP_SERVER_ENABLED TRUE)
+
+else() # 开关关闭：不定义该库，也不把它写进导出集与安装规则
+
+    set(COMMONNET_HTTP_SERVER_ENABLED FALSE) # 生成的 CommonNetConfig.cmake 不再查找 beast / json
+
+endif() # HTTP 服务端库开关结束
+
 # ── 构建期头文件交付：把公开头文件同步到 .lib 同级目录 ──────────
 # 让构建产物目录本身就是一个「lib + include」齐备、可直接被其他工程引用的交付目录，
 # 不必先 install 再取用；install 规则保持不变（两者互不影响）。
@@ -285,7 +335,7 @@ set_target_properties(CommonNetClient PROPERTIES EXPORT_NAME Net::Client) # 导�
 #   于是 include/ 始终与 .lib 同级，换生成器不必改配置。
 #
 # 为什么两种目录结构各放一份：
-#   include/NetServer.h                    -> 下游只加一个 -I<lib>/include 即可（三个头文件名互不冲突）
+#   include/NetServer.h                    -> 下游只加一个 -I<lib>/include 即可（各头文件名互不冲突）
 #   include/Common/Net/Server/NetServer.h  -> 与 install 后的 INSTALL_INTERFACE 布局完全一致
 #
 # 为什么挂在 ALL 自定义目标上、而不是库的 POST_BUILD：
@@ -301,9 +351,14 @@ set(COMMONNET_PUBLIC_HEADERS # 公开头文件清单：<源文件相对路径>|<
     "Server/include/NetServer.h|Common/Net/Server" # 服务端库头文件
     "Client/include/NetClient.h|Common/Net/Client") # 客户端库头文件
 
+if(COMMONNET_BUILD_HTTP_SERVER) # HTTP 服务端库开启时，它的公开头文件同样要参与同步
+    list(APPEND COMMONNET_PUBLIC_HEADERS
+        "HttpServer/include/NetHttpServer.h|Common/Net/HttpServer") # HTTP 服务端库头文件
+endif() # 清单追加结束
+
 set(COMMONNET_STAGE_INCLUDEDIR "$<TARGET_FILE_DIR:CommonNetCore>/include") # 交付目录：与 .lib 同级
 set(COMMONNET_STAGE_COMMANDS) # 累积同步命令（下面按头文件逐条追加）
-foreach(header_entry IN LISTS COMMONNET_PUBLIC_HEADERS) # 遍历三个公开头文件
+foreach(header_entry IN LISTS COMMONNET_PUBLIC_HEADERS) # 遍历全部公开头文件
     string(REPLACE "|" ";" header_fields "${header_entry}") # 拆成「源路径 / 子目录」两段
     list(GET header_fields 0 header_rel) # 形如 connon/include/NetConnection.h
     list(GET header_fields 1 header_subdir) # 形如 Common/Net/Core
@@ -319,11 +374,14 @@ add_custom_target(CommonNetStageHeaders ALL # ALL：纳入默认构建，每次�
     COMMENT "同步公开头文件到 .lib 同级的 include/（平铺 + 分层各一份）" # 构建时打印的一行说明
     VERBATIM) # VERBATIM：参数原样传递，避免路径中的空格/分号被额外解释
 
-# 显式声明依赖：头文件同步必须在三个库构建完成之后进行。
+# 显式声明依赖：头文件同步必须在所有库构建完成之后进行。
 # 目标命令里虽然用到了 $<TARGET_FILE_DIR:CommonNetCore>，但那只是"取值"，
 # 不会建立构建顺序依赖；并行构建（cmake --build build --parallel）时若无此行，
 # 同步与库编译可能交错，产物目录会短暂出现"新头文件 + 旧库"的组合。
 add_dependencies(CommonNetStageHeaders CommonNetCore CommonNetServer CommonNetClient)
+if(COMMONNET_BUILD_HTTP_SERVER) # HTTP 服务端库同样纳入这套顺序约束
+    add_dependencies(CommonNetStageHeaders CommonNetHttpServer)
+endif() # HTTP 服务端库依赖声明结束
 
 # ── 示例可执行文件 ──────────────────────────────────────
 if(COMMONNET_BUILD_EXAMPLES) # 开关打开时才进入子目录
@@ -342,6 +400,14 @@ install(TARGETS CommonUtils CommonNetCore CommonNetServer CommonNetClient # 安�
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} # 共享库（Linux 的 .so）→ lib/
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}) # 静态库与导入库（.lib / .a）→ lib/
 
+if(COMMONNET_BUILD_HTTP_SERVER) # HTTP 服务端库：登记进同一个导出集（install(TARGETS) 可按目标分多次调用，导出集是累加的）
+    install(TARGETS CommonNetHttpServer
+        EXPORT CommonNetTargets # 与上面四个库同一个导出集，下游看到的仍是 Common::Net::HttpServer
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # 运行期产物（Windows 下的 .dll）→ bin/
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} # 共享库（Linux 的 .so）→ lib/
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}) # 静态库与导入库（.lib / .a）→ lib/
+endif() # HTTP 服务端库安装结束
+
 # 核心头文件：CommonNetCore 的接口会带上 Common::Utils（即 Utils::Utils），
 # 其包含目录由 vcpkg 的导入目标提供，故 #include "Message.h" 依旧能找到
 install(FILES # 安装核心头文件
@@ -355,6 +421,12 @@ install(FILES # 安装服务端头文件
 install(FILES # 安装客户端头文件
     Client/include/NetClient.h # 供下游 #include "NetClient.h"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/Common/Net/Client) # 落到 include/Common/Net/Client
+
+if(COMMONNET_BUILD_HTTP_SERVER) # HTTP 服务端库头文件
+    install(FILES # 安装 HTTP 服务端头文件
+        HttpServer/include/NetHttpServer.h # 供下游 #include "NetHttpServer.h"
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/Common/Net/HttpServer) # 落到 include/Common/Net/HttpServer
+endif() # HTTP 服务端库头文件安装结束
 
 install(EXPORT CommonNetTargets # 把导出集写成下游可 include 的 targets 文件
     FILE CommonNetTargets.cmake # 生成文件名

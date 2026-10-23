@@ -66,19 +66,21 @@ namespace Net
             Session(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock, std::shared_ptr<HandleFunction> HF,
                     long long timeout, int maxSendBufLen);
 
+            ~Session() override = default;
+
             /// @brief      回复消息
             /// @details    线程安全的发送入口（内部 post 到 IO 线程），向该客户端回复一条消息
             /// @param[in] msg_id 消息全局唯一ID
             /// @param[in] msg 消息序列化字符串
             /// @warning    禁止在回调或事件循环中长时间阻塞；msg 为空时只打印错误日志并丢弃
             /// @note
-            void reply(unsigned long long msg_id, const std::string& msg);
+            bool reply(unsigned long long msg_id, const std::string& msg);
 
             /// @brief      关闭函数
             /// @details    置位停止标志并走基类的优雅关闭（先把发送队列发完再断开）
             /// @warning    线程安全，最终关闭在 IO 线程内完成
             /// @note
-            void closeSession();
+            virtual void closeSession();
 
             /// @brief      是否已关闭
             /// @details    判断连接是否已进入关闭流程（stop / closing）或 socket 已断开
@@ -93,6 +95,21 @@ namespace Net
             /// @note       由服务器监控线程在 IO 线程内调用
             bool timeOut();
 
+            /// @brief 同步硬关闭（不清队列、不等待）
+            /// @warning **只在 IO 线程已停止时使用**（析构阶段 / ioc.stopped()）
+            /// @note 内部走基类 errToClose()，幂等
+            void closeHard();
+
+            /// @brief  是否在忙（正在处理请求，含等待业务异步回包、响应写出中）
+            /// @return 忙返回 true
+            /// @note   供空闲巡检判断，避免误杀正在等业务回包的会话
+            bool busing() const;
+
+            /// @brief 忙状态是否已超过上限（仅在 IO 线程调用）
+            /// @param limitSec 当前时间
+            /// @return
+            bool busyTimedOut(long long limitSec) const;
+
         protected:
             /// @brief      业务处理
             /// @details    收到消息后的具体业务实现，由基类回调触发：内容为 kCloseCommand 时关闭会话，
@@ -101,7 +118,7 @@ namespace Net
             /// @param[in] msg 消息序列化字符串
             /// @warning    禁止在回调内部长时间阻塞，会阻塞asio事件循环
             /// @note
-            void recvToWork(const unsigned long long msg_id, std::string msg) override;
+            void recvToWork(const unsigned long long msg_id, std::string msg);
 
             /// @brief      更新连接时间
             /// @details    刷新 lastTime，供超时巡检使用，避免空闲连接长期占线
@@ -114,6 +131,14 @@ namespace Net
             /// @note 由基类 socketClose() 保证只回调一次
             void derivedToClose() override;
 
+            /// @brief 是否正在处理请求（避免巡检线程误杀正在等待业务返回的会话）
+            std::atomic<bool> busy = false;
+
+        private:
+            // 将tosend函数降级为保护
+            // 发送消息使用reply
+            using Connection::toSend;
+
             /// @brief      获取自身的指针
             /// @details    把 shared_from_this() 向下转型为 Session 的 shared_ptr，供回调向外传递
             /// @return     Session 的 shared_ptr（static_pointer_cast 不做运行时校验，正常不会为空）
@@ -124,20 +149,23 @@ namespace Net
             /// @details 用于收到消息的具体消息处理（在 IO 线程内调用）
             std::shared_ptr<HandleFunction> HF = nullptr;
 
-        private:
-            /// @brief 停止标志
-            /// @details 标识该会话是否已被请求关闭（由 closeSession 置位）
-            /// @note
-            std::atomic<bool> stop = false;
+            /// @brief 记录超时时间
+            /// @details 会话空闲超时时间，单位秒（构造函数传入，0 时回退为 60）
+            long long timeout = 60;
 
             /// @brief 最后更新时间
             /// @details 记录最后一次读写活动的时间戳（秒），timeOut() 依据它判断空闲超时
             /// @note
             std::atomic<time_t> lastTime;
 
-            /// @brief 记录超时时间
-            /// @details 会话空闲超时时间，单位秒（构造函数传入，0 时回退为 60）
-            long long timeout = 60;
+            /// @brief 停止标志
+            /// @details 标识该会话是否已被请求关闭（由 closeSession 置位）
+            /// @note
+            std::atomic<bool> stop = false;
+
+            /// @brief 进入忙时状态的时刻
+            /// @details 采用原子事件
+            std::atomic<time_t> busySince = 0;
         };
 
         /// @brief      服务器端
@@ -158,11 +186,12 @@ namespace Net
             /// @param[in] maxSendBufLen 每个会话的发送队列允许积压的最大字节数，默认 10MB
             /// @warning    须保证 io 的生命周期长于本服务器；非正数入参会回退为默认值并打印错误日志
             /// @note
-            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep, std::shared_ptr<HandleFunction> HF,
-                   long long timeOut = 60, long long checkTime = 60, int maxSendBufLen = 1024 * 1024 * 10);
+            Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
+                   std::shared_ptr<HandleFunction> HF = nullptr, long long timeOut = 60, long long checkTime = 60,
+                   int maxSendBufLen = 1024 * 1024 * 10, long long sessionTimeOut = 60);
 
             /// @brief      析构函数
-            /// @details    先 Stop() 停服并关闭所有会话，再 join 监控线程
+            /// @details    先 stop() 停服并关闭所有会话，再 join 监控线程
             /// @note       派生类析构会自动调用基类析构；join 后可避免 std::thread 析构时 std::terminate
             virtual ~Server();
 
@@ -170,13 +199,13 @@ namespace Net
             /// @details 置 running、绑定 selfWeak，随后启动监控线程（clearSession）并开始 accept
             /// @warning 会启动一个监控线程；调用者必须已经用 shared_ptr 持有本对象
             /// @note 幂等：已在运行时只打印提示；Stop() 后重启会先回收上一轮的监控线程
-            void start();
+            virtual void start();
 
             /// @brief      停止服务器
             /// @details    置 running=false 并 notify_all 唤醒监控线程，再 post 到 IO 线程关闭 acceptor、逐个关闭会话
             /// @warning    调用后服务器不再接受新连接，须重新构造使用
             /// @note       幂等，可重复调用
-            virtual void Stop();
+            virtual void stop();
 
         protected:
             /// @brief      所属的 io_context
@@ -184,16 +213,46 @@ namespace Net
             /// @warning    生命周期须长于本服务器
             boost::asio::io_context& ioc;
 
+            /// @brief      自身弱引用
+            /// @details    供监控线程与 stop() 安全地判断 Server 是否仍存活，并保活投递到 IO 线程的任务
+            /// @note       在 start() 中由 shared_from_this() 赋值
+            std::weak_ptr<Server> selfWeak;
+
+            /// @brief      运行状态标志
+            /// @details    标识服务器当前是否正在运行；Stop() 置 false 后 accept / 监控线程都会退出
+            /// @note       跨线程读写，故使用 std::atomic
+            std::atomic<bool> running = false;
+
+            /// @brief      会话列表
+            /// @details    管理所有已建立的连接会话
+            /// @warning    Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
+            /// @note       仅在 IO 线程内读写
+            std::vector<std::shared_ptr<Session>> sessions;
+
+            /// @brief 监听节点
+            boost::asio::ip::tcp::endpoint ep;
+
+            /// @brief 关闭监听器与全部会话并清空会话表
+            /// @warning 只能在 IO 线程内调用；**例外**：析构阶段 / ioc.stopped() 时
+            ///          （那时 IO 线程不跑了，也不会有别的线程动 sessions）
+            void closeAll();
+
+            /// @brief 打开Acceptor
+            /// @details 为了支持重启的重连
+            /// @param[out] ec 错误码
+            /// @return 返回连接的状态
+            bool openAcceptor(boost::system::error_code ec);
+
         private:
             /// @brief      开始接受连接
             /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
             ///             为每个新连接创建 Session（关闭 NoDelay）后继续接受下一个连接
             /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略
             /// @note       accept 失败时等 100ms 重试，服务器已停止则不再重试
-            void StartAccept();
+            void startAccept();
 
             /// @brief      监控线程主体
-            /// @details    按 checkTime 周期睡眠（可被 Stop() 立即唤醒），醒来后 post 到 io_context：
+            /// @details    按 checkTime 周期睡眠（可被 stop() 立即唤醒），醒来后 post 到 io_context：
             ///             关闭超时会话，并从 sessions 中移除已关闭的会话
             /// @warning    在独立线程中运行，禁止直接访问只在 IO 线程内读写的 sessions
             /// @note       每轮都通过 selfWeak 取保活指针，取不到说明 Server 已析构，直接退出
@@ -203,12 +262,6 @@ namespace Net
             /// @details    保存用于 listen / accept 的 acceptor
             /// @note       仅在 IO 线程内使用
             boost::asio::ip::tcp::acceptor acceptor;
-
-            /// @brief      会话列表
-            /// @details    管理所有已建立的连接会话
-            /// @warning    Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
-            /// @note       仅在 IO 线程内读写
-            std::vector<std::shared_ptr<Session>> sessions;
 
             /// @brief      监控线程互斥锁
             /// @details    与 queueCV 配合保护 running 标志，并保证监控线程的等待可被打断
@@ -228,16 +281,6 @@ namespace Net
             /// @note
             std::thread clearSessionThread;
 
-            /// @brief      自身弱引用
-            /// @details    供监控线程与 Stop() 安全地判断 Server 是否仍存活，并保活投递到 IO 线程的任务
-            /// @note       在 start() 中由 shared_from_this() 赋值
-            std::weak_ptr<Server> selfWeak;
-
-            /// @brief      运行状态标志
-            /// @details    标识服务器当前是否正在运行；Stop() 置 false 后 accept / 监控线程都会退出
-            /// @note       跨线程读写，故使用 std::atomic
-            std::atomic<bool> running = false;
-
             /// @brief 回调的函数
             /// @details 整个服务器共用的业务处理回调，创建 Session 时下发给每个会话
             std::shared_ptr<HandleFunction> HF;
@@ -253,6 +296,15 @@ namespace Net
             /// @brief 记录每个session的最大发送内存
             /// @details 下发给每个新建 Session 的发送队列积压上限，单位字节（非正数时回退为 10MB）
             int maxSendBufLen = 0;
+
+            /// @brief 标记此服务是否已经启动过了
+            std::atomic<bool> starting = false;
+
+            /// @brief 记录重试次数
+            unsigned int acceptorConnectionCount = 0;
+
+            /// @brief 记录会话忙时回包等待时间
+            long long sessionTimeOut = 60;
         };
     } // namespace Server
 } // namespace Net

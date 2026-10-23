@@ -616,7 +616,8 @@ namespace Net
     /// @details    把消息封装为发送任务（12 字节消息头 + 消息体）并加入发送队列，线程安全，可在外部线程调用
     /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] msg 消息序列化字符串
-    /// @warning    队列积压（queueBufLen + 本条消息体长度）超过 maxSendBufLen 时，在 IO 线程内抛出 std::invalid_argument
+    /// @warning    队列积压（queueBufLen + 本条消息体长度）超过 maxSendBufLen 时，在 IO 线程内抛出
+    /// std::invalid_argument
     /// @note       任务 post 到 IO 线程执行，实际入队与发送都在 IO 线程内完成
     void Connection::send(unsigned long long msg_id, std::string msg)
     {
@@ -624,78 +625,86 @@ namespace Net
         auto self = shared_from_this();
 
         // 获得其他线程的发送调用
-        boost::asio::post(socket.get_executor(),
-                          [this, self, msg_id, msg = std::move(msg)]() mutable
-                          {
-                              // 检查是否在关闭状态
-                              if (closing)
-                              {
-                                  Utils::Out::outErr("准备发送消息，但是正在关闭连接，拒绝添加任务到发送队列");
+        boost::asio::post(
+            socket.get_executor(),
+            [this, self, msg_id, msg = std::move(msg)]() mutable
+            {
+                // 检查是否在关闭状态
+                if (closing)
+                {
+                    Utils::Out::outErr("准备发送消息，但是正在关闭连接，拒绝添加任务到发送队列");
 
-                                  stopToClose();
+                    stopToClose();
 
-                                  return;
-                              }
+                    return;
+                }
 
-                              // 构建发送任务
-                              auto send_node =
-                                  std::make_shared<SendNode>(msg_id, HEAD_LENGTH + static_cast<int>(msg.size()));
+                // 构建发送任务
+                auto send_node = std::make_shared<SendNode>(msg_id, HEAD_LENGTH + static_cast<int>(msg.size()));
 
-                              // 获取消息缓存空间
-                              char* buf = send_node->getBuf();
+                // 获取消息缓存空间
+                char* buf = send_node->getBuf();
 
-                              // 转换字节序（长度用32位，ID用64位）
-                              uint32_t net_msg_len = htonl(static_cast<int>(msg.size()));
-                              uint64_t net_msg_id = htonll(static_cast<uint64_t>(msg_id));
+                // 转换字节序（长度用32位，ID用64位）
+                uint32_t net_msg_len = htonl(static_cast<int>(msg.size()));
+                uint64_t net_msg_id = htonll(static_cast<uint64_t>(msg_id));
 
-                              // 写入缓存（写ID，写长度，写消息）
-                              std::memcpy(buf, &net_msg_id, HEAD_ID_LENGTH);
-                              std::memcpy(buf + HEAD_ID_LENGTH, &net_msg_len, HEAD_LEN_LENGTH);
-                              if (!msg.empty())
-                              {
-                                  std::memcpy(buf + HEAD_LENGTH, msg.data(), static_cast<int>(msg.size()));
-                              }
+                // 写入缓存（写ID，写长度，写消息）
+                std::memcpy(buf, &net_msg_id, HEAD_ID_LENGTH);
+                std::memcpy(buf + HEAD_ID_LENGTH, &net_msg_len, HEAD_LEN_LENGTH);
+                if (!msg.empty())
+                {
+                    std::memcpy(buf + HEAD_LENGTH, msg.data(), static_cast<int>(msg.size()));
+                }
 
-                              // 设置发送长度
-                              send_node->setCurLen(HEAD_LENGTH + static_cast<int>(msg.size()));
-                              // 设置发送ID
-                              send_node->setID(msg_id);
+                // 设置发送长度
+                send_node->setCurLen(HEAD_LENGTH + static_cast<int>(msg.size()));
+                // 设置发送ID
+                send_node->setID(msg_id);
+                const std::size_t frameLen = static_cast<std::size_t>(HEAD_LENGTH) + msg.size();
 
-                              // 外层 lambda 已在 IO 线程中执行，直接入队
-                              sendQueue.push_back(send_node);
+                if (queueBufLen < 0)
+                {
+                    queueBufLen = 0;
+                } // 兜底历史漂移
 
-                              // 判断发送队列是否还有空余（超过上限则抛出异常）
-                              if (msg.size() + queueBufLen > maxSendBufLen)
-                              {
-                                  throw std::invalid_argument("发送错误，队列内存已满");
-                              }
+                // 限流：先判断再入队，全部用 size_t
+                if (static_cast<std::size_t>(queueBufLen) + frameLen > static_cast<std::size_t>(maxSendBufLen))
+                {
+                    Utils::Out::outErr("发送队列积压达上限 " + std::to_string(maxSendBufLen) +
+                                       " 字节，丢弃本条消息（msg_id=" + std::to_string(msg_id) + "）");
+                    return;
+                }
 
-                              queueBufLen += msg.size();
+                // 放入发送队列中
+                sendQueue.push_back(send_node);
+                // 与出队同一口径
+                queueBufLen += static_cast<int>(frameLen);
 
-                              updateTime();
+                updateTime();
 
-                              // 判断是否在发送状态，不是就启动发送，是则等待
-                              if (!sending)
-                              {
-                                  try
-                                  {
-                                      // 启动发送队列
-                                      doSend();
-                                  }
-                                  catch (const std::exception& e)
-                                  {
-                                      Utils::Out::outErr("出现错误" + std::string(e.what()));
+                // 判断是否在发送状态，不是就启动发送，是则等待
+                if (!sending)
+                {
+                    try
+                    {
+                        // 启动发送队列
+                        doSend();
+                    }
+                    catch (const std::exception& e)
+                    {
+                        Utils::Out::outErr("出现错误" + std::string(e.what()));
 
-                                      errToClose();
-                                  }
-                                  catch (...)
-                                  {
-                                      Utils::Out::outErr("未知错误");
+                        errToClose();
+                    }
+                    catch (...)
+                    {
+                        Utils::Out::outErr("未知错误");
 
-                                      errToClose();
-                                  }
-                              }
-                          });
+                        errToClose();
+                    }
+                }
+            });
     }
 
     /// @brief      发送消息

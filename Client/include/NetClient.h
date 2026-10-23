@@ -74,7 +74,7 @@ namespace Net
             /// @details    从外部线程安全调用，向 IO 线程投递关闭请求，不丢弃已发送队列中的消息
             /// @warning    异步执行，调用后连接最终断开
             /// @note       内部即基类 stopToClose()，幂等
-            void Stop();
+            void stop();
 
             /// @brief      获取端口和ip
             /// @return     本客户端保存的 HostPort（host + port）
