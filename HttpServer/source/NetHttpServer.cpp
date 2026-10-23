@@ -576,11 +576,9 @@ namespace Net::Server::HttpServer
     /// @note 幂等：已在运行时只打印提示；stop() 后重启会先 join 掉上一轮的巡检线程
     void HttpServer::start()
     {
-        // 判断是否已经启动
-        if (startingHttp.exchange(true) || httpRunning)
+        // 判断是否已经启动（幂等：已在运行时只打印提示）
+        if (httpRunning.load())
         {
-            // http设置为正确的
-            httpRunning = true;
             Utils::Out::outMsg("HTTP 服务器已经在运行监听了");
             return;
         }
@@ -834,14 +832,8 @@ namespace Net::Server::HttpServer
         {
             // 加锁
             std::lock_guard<std::mutex> lock(queueHttpMutex);
-            // 判断是否已经关闭
-            if (startingHttp.exchange(false) || httpRunning)
-            {
-                // http设置为正确的
-                httpRunning = false;
-                Utils::Out::outMsg("服务器已经在运行监听了");
-                return;
-            }
+            // 无条件置停止标志（幂等；这里绝不做任何"闸门"早退，否则关闭动作会被跳过）
+            httpRunning = false;
         }
 
         // 唤醒正在周期等待的巡检线程，让它立即退出等待
@@ -850,15 +842,15 @@ namespace Net::Server::HttpServer
         // 保活，不保存引用
         auto self = std::static_pointer_cast<HttpServer>(selfWeak.lock());
 
-        if (!self)
+        // 从未启动过 / 正在析构 / IO 线程已停：投递出去也没人执行 → 就地同步关闭
+        if (!self || ioc.stopped())
         {
-            // 从未启动过，或正在析构：此时不会有别的线程再动会话表，直接同步关闭
-            closeAll();
+            closeHttpAll();
             return;
         }
 
-        // post 到 IO 线程执行关闭动作
-        boost::asio::post(ioc, [this, self]() { closeAll(); });
+        // post 到 IO 线程执行关闭动作（关的是 HTTP 自己的监听器与会话表）
+        boost::asio::post(ioc, [this, self]() { closeHttpAll(); });
     }
 
     /// @brief 关闭监听器与全部会话

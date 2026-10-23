@@ -313,9 +313,6 @@ namespace Net::Server::HttpServer
         /// @note
         std::condition_variable queueHttpCV;
 
-        /// @brief 标记此服务是否已经启动过了
-        std::atomic<bool> startingHttp = false;
-
         /// @brief httpAcceptor重连错误
         unsigned int httpAcceptorConnectionCount = 0;
 
