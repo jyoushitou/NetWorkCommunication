@@ -212,7 +212,7 @@ namespace Net
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
                        std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime, int maxSendBufLen,
                        long long sessionTimeOut)
-            : ioc(io), acceptor(io)
+            : ioc(io), ep(ep), acceptor(io)
         {
             // 给智能指针赋值
             this->HF = HF;
