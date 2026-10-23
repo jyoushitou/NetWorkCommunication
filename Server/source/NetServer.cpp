@@ -17,6 +17,13 @@ namespace Net
 {
     namespace Server
     {
+        namespace
+        {
+            /// @brief 优雅关闭的宽限期（秒）：超过则强制断开
+            /// @details 对端不读数据时 async_write 永远完不成，优雅关闭会一直挂着
+            constexpr long long kCloseGraceSeconds = 30;
+        } // namespace
+
         /// @brief      构造函数
         /// @details    session的构造：接管 socket，保存业务回调、超时时间与发送上限，并初始化活动时间
         /// @param[in] io 连接的io_context
@@ -33,8 +40,12 @@ namespace Net
             stop = false;
             // 给回调函数赋值
             this->HF = HF;
-            // timeout 为 0 时回退为默认 60 秒
-            this->timeout = timeout ? timeout : 60;
+            // 非正数（含负数）回退为默认 60 秒：负数会让 timeOut() 恒为真，会话一进巡检就被秒关
+            if (timeout <= 0)
+            {
+                Utils::Out::outErr("timeout 非法（" + std::to_string(timeout) + "），已回退为默认 60 秒");
+            }
+            this->timeout = (timeout > 0) ? timeout : 60;
 
             // 初始化时间
             updateTime();
@@ -124,6 +135,8 @@ namespace Net
         void Session::closeSession()
         {
             stop = true;
+            // 记下请求关闭的时刻，供 needForceClose() 计算优雅关闭已经等了多久
+            closeReqTime.store(Utils::Time::nowTime());
             // 使用基类的关闭函数
             stopToClose();
         }
@@ -175,6 +188,30 @@ namespace Net
             return stop.load() || closing.load() || !socket.is_open();
         }
 
+        /// @brief 是否超过优雅关闭宽限期
+        /// @details 已请求关闭、但 socket 还没关，且距请求关闭已超过 graceSec 秒
+        /// @warning 仅在 IO 线程内调用
+        /// @note
+        bool Session::needForceClose(long long graceSec)
+        {
+            if (!stop.load() || !socket.is_open())
+            {
+                return false;
+            }
+
+            const time_t req = closeReqTime.load();
+            return req != 0 && Utils::Time::computeTime(req) > graceSec;
+        }
+
+        /// @brief 强制关闭（不等发送队列）
+        /// @warning 仅在 IO 线程内调用
+        /// @note
+        void Session::forceClose()
+        {
+            Utils::Out::outErr("会话优雅关闭超过宽限期，强制断开");
+            errToClose();
+        }
+
         /// @brief  是否在忙（正在处理请求，含等待业务异步回包）
         /// @return 忙返回 true
         /// @note   供空闲巡检判断，避免误杀正在等业务回包的会话
@@ -211,8 +248,8 @@ namespace Net
         /// @note
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
                        std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime, int maxSendBufLen,
-                       long long sessionTimeOut)
-            : ioc(io), acceptor(io)
+                       long long sessionTimeOut, int maxConnections)
+            : ioc(io), ep(ep), acceptor(io)
         {
             // 给智能指针赋值
             this->HF = HF;
@@ -226,16 +263,17 @@ namespace Net
                 Utils::Out::outErr("timeOut / checkTime 非法，已回退为默认 60 秒");
             }
 
-            // 初始化每个 session 的发送队列上限（非正数回退为 10MB）
-            this->maxSendBufLen = maxSendBufLen ? maxSendBufLen : 1024 * 1024 * 10;
-
-            this->sessionTimeOut = sessionTimeOut;
-
-            // 判断maxSendBufLen是否合法
+            // 初始化每个 session 的发送队列上限（非正数含负数都回退为 10MB）
             if (maxSendBufLen <= 0)
             {
                 Utils::Out::outErr("maxSendBufLen 非法，已回退为默认1024*1024*10");
             }
+            this->maxSendBufLen = (maxSendBufLen > 0) ? maxSendBufLen : 1024 * 1024 * 10;
+
+            this->sessionTimeOut = sessionTimeOut;
+
+            // 最大并发连接数（非正数视为不限制）
+            this->maxConnections = maxConnections;
 
             // 将运行状态初始化
             running = false;
@@ -246,7 +284,7 @@ namespace Net
             Utils::Out::outMsg("服务器对象初始化完成");
         }
 
-        bool Server::openAcceptor(boost::system::error_code ec)
+        bool Server::openAcceptor(boost::system::error_code& ec)
         {
             if (acceptor.is_open())
             {
@@ -304,11 +342,9 @@ namespace Net
         /// @note 幂等：已在运行时只打印提示；Stop() 后重启会先 join 掉上一轮的监控线程
         void Server::start()
         {
-            // 判断是否已经启动
-            if (starting.exchange(true) || running)
+            // 判断是否已经启动（幂等：已在运行时只打印提示，绝不能去 join 自己那一轮的线程）
+            if (running.load())
             {
-                // http设置为正确的
-                running = true;
                 Utils::Out::outMsg("服务器已经在运行监听了");
                 return;
             }
@@ -324,6 +360,8 @@ namespace Net
             boost::system::error_code ec;
             if (!openAcceptor(ec))
             {
+                // ec 现在按引用传出，异常消息里能看到真实原因（如 address in use）
+                Utils::Out::outErr("Server 监听失败：" + ec.message());
                 throw boost::system::system_error(ec, "Server监听失败");
             }
 
@@ -396,7 +434,7 @@ namespace Net
         /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
         ///             为每个新连接创建对应的 Session（关闭 NoDelay）后继续接受下一个连接
         /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略
-        /// @note       accept 失败时等 100ms 重试，服务器已停止则不再重试
+        /// @note       accept 失败时按指数退避重试（上限 5s），服务器已停止则不再重试
         void Server::startAccept()
         {
             // 保活 Server 自身
@@ -423,6 +461,16 @@ namespace Net
 
                     if (!ec)
                     {
+                        // 连接数上限：达到上限就立刻关掉这条新连接，避免句柄/内存被吃光
+                        if (maxConnections > 0 && sessions.size() >= static_cast<std::size_t>(maxConnections))
+                        {
+                            Utils::Out::outErr("连接数已达上限 " + std::to_string(maxConnections) + "，拒绝新连接");
+                            boost::system::error_code ignored;
+                            sock->close(ignored);
+                            startAccept();
+                            return;
+                        }
+
                         // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
                         // 构造函数按值接收 socket，需 std::move(*sock)
                         auto session = std::make_shared<Session>(ioc, std::move(*sock), HF, timeOut, maxSendBufLen);
@@ -452,7 +500,6 @@ namespace Net
                             {
                                 std::lock_guard<std::mutex> lock(queueMutex);
                                 running.store(false);
-                                starting.store(false);
                             }
                             // 唤醒监控线程清理所有
                             queueCV.notify_all();
@@ -471,8 +518,8 @@ namespace Net
                         const unsigned shift = (std::min)(acceptorConnectionCount, 6u);
                         const long long delayMs = (std::min)(5000LL, 100LL << shift);
 
-                        // 等待100ms后尝试重新连接
-                        auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(100));
+                        // 按退避时长重试（100ms → 200ms → … 上限 5s）
+                        auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(delayMs));
                         timer->async_wait(
                             [this, self, timer](const boost::system::error_code& waitEC)
                             {
@@ -537,10 +584,9 @@ namespace Net
                                                   if (it->busyTimedOut(sessionTimeOut))
                                                   {
                                                       Utils::Out::outErr("回包时间过长");
-                                                      if (it->reply(1, "bussing timeout"))
-                                                      {
-                                                          it->closeSession();
-                                                      }
+                                                      // 发不发得出去都要关：原来只在发送成功时才关，失败会让这条连接永久占着
+                                                      it->reply(kServerBusyTimeoutMsgId, "bussing timeout");
+                                                      it->closeSession();
                                                   }
                                                   continue;
                                               }
@@ -548,7 +594,7 @@ namespace Net
                                               try
                                               {
                                                   // 回复提醒消息
-                                                  it->reply(0LL, "长时间未发送，关闭连接");
+                                                  it->reply(kServerTimeoutMsgId, "长时间未发送，关闭连接");
                                               }
                                               catch (const std::exception& e)
                                               {
@@ -563,17 +609,33 @@ namespace Net
                                           }
                                       }
 
-                                      // 检查是否关闭
+                                      // 第三轮：优雅关闭宽限期兜底（对端不读时发送队列永远发不完）
+                                      for (auto& it : sessions)
+                                      {
+                                          if (it && it->needForceClose(kCloseGraceSeconds))
+                                          {
+                                              try
+                                              {
+                                                  it->forceClose();
+                                              }
+                                              catch (...)
+                                              {
+                                                  Utils::Out::outErr("强制关闭会话时出现未知错误");
+                                              }
+                                          }
+                                      }
+
+                                      // 检查是否关闭（socket 真正关闭才回收）
                                       for (auto it = sessions.begin(); it != sessions.end();)
                                       {
-                                          if ((*it)->isClosed())
+                                          if ((*it)->needReclaim())
                                           {
                                               // 避免悬空的迭代器
                                               it = sessions.erase(it);
                                               // 避免后面自增
                                               continue;
                                           }
-                                          it++;
+                                          ++it;
                                       }
                                   });
             }
@@ -589,14 +651,8 @@ namespace Net
                 // 加锁
                 std::lock_guard<std::mutex> lock(queueMutex);
 
-                // 判断是否已经关闭
-                if (starting.exchange(false) || running)
-                {
-                    // http设置为正确的
-                    running = false;
-                    Utils::Out::outMsg("服务器已经在运行监听了");
-                    return;
-                }
+                // 无条件置停止标志（幂等；这里绝不做任何"闸门"早退，否则关闭动作会被跳过）
+                running = false;
             }
 
             // 唤醒正在周期等待的监控线程，让它立即退出等待
@@ -605,28 +661,15 @@ namespace Net
             // 保活，不保存引用
             auto self = selfWeak.lock();
 
-            if (self == nullptr)
+            // 从未 start() / 正在析构 / IO 线程已停：投递出去也没人执行 → 就地同步关闭
+            if (self == nullptr || ioc.stopped())
             {
+                closeAll();
                 return;
             }
 
-            // post 到 IO 线程执行关闭动作
-            boost::asio::post(ioc,
-                              [this, self]()
-                              {
-                                  // 关闭 acceptor，不再接受新连接
-                                  boost::system::error_code ec;
-                                  acceptor.close(ec);
-
-                                  // 循环通知每个会话关闭（用 size_t 避免有符号/无符号比较告警）
-                                  for (std::size_t i = 0; i < sessions.size(); ++i)
-                                  {
-                                      sessions[i]->closeSession();
-                                  }
-
-                                  // 清理会话
-                                  sessions.clear();
-                              });
+            // post 到 IO 线程执行关闭动作（复用 closeAll，避免两份关闭逻辑漂移）
+            boost::asio::post(ioc, [this, self]() { closeAll(); });
         }
     } // namespace Server
 } // namespace Net

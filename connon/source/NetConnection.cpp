@@ -52,10 +52,10 @@ namespace Net
     }
 
     /// @brief      构造函数（只有长度）
-    /// @details    委托到 MsgNode(msg_id, max_len)，消息ID传 -1ULL 表示无效值
+    /// @details    委托到 MsgNode(msg_id, max_len)，消息ID传 MSG_ID_INVALID（全 1）表示无效值
     /// @param[in] max_len 缓存的最大长度
-    /// @note
-    MsgNode::MsgNode(int max_len) : MsgNode(-1ULL, max_len)
+    /// @note       用 ~0ULL 而不是 -1ULL：后者对无符号取负会触发 MSVC C4146 告警
+    MsgNode::MsgNode(int max_len) : MsgNode(MSG_ID_INVALID, max_len)
     {
     }
 
@@ -115,11 +115,11 @@ namespace Net
     }
 
     /// @brief      设置消息ID
-    /// @param[in] msg_id 消息全局唯一ID
+    /// @param[in] id 消息全局唯一ID（形参不与成员同名，避免 C4458）
     /// @note
-    void MsgNode::setID(unsigned long long msg_id)
+    void MsgNode::setID(unsigned long long id)
     {
-        this->msg_id = msg_id;
+        msg_id = id;
     }
 
     /// @brief      析构函数
@@ -616,8 +616,8 @@ namespace Net
     /// @details    把消息封装为发送任务（12 字节消息头 + 消息体）并加入发送队列，线程安全，可在外部线程调用
     /// @param[in] msg_id 消息全局唯一ID
     /// @param[in] msg 消息序列化字符串
-    /// @warning    队列积压（queueBufLen + 本条消息体长度）超过 maxSendBufLen 时，在 IO 线程内抛出
-    /// std::invalid_argument
+    /// @warning    队列积压（queueBufLen + 本条消息体长度）超过 maxSendBufLen 时，丢弃本条消息并记日志；
+    ///             **绝不在 IO 线程的 handler 里抛异常**（会冲出 io_context::run()）
     /// @note       任务 post 到 IO 线程执行，实际入队与发送都在 IO 线程内完成
     void Connection::send(unsigned long long msg_id, std::string msg)
     {

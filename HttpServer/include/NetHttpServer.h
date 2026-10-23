@@ -53,8 +53,8 @@ namespace Net::Server::HttpServer
         /// @brief 客户端是否希望复用连接（HTTP/1.1 默认 true）
         bool keep_alive = true;
 
-        /// @brief 本次请求的请求号;
-        unsigned seq = 0;
+        /// @brief 本次请求的请求号（与 httpAsyncReplay 的 seq 参数配对，防止迟到回包串请求）
+        unsigned long long seq = 0;
     };
 
     /// @brief HTTP 会话前向声明
@@ -124,6 +124,12 @@ namespace Net::Server::HttpServer
         void httpAsyncReplay(unsigned long long seq, const std::string& body,
                              boost::beast::http::status st = boost::beast::http::status::ok);
 
+        /// @brief 兼容接口：按"当前请求"回包（等价于 httpAsyncReplay(reqSeq, body, 200)）
+        /// @param[in] body 响应体（空串会被忽略）
+        /// @warning 迟到回包有串请求风险，新代码请用带 seq 的版本
+        /// @note
+        void httpAsyncReplay(const std::string& body);
+
         /// @brief      标记「本次响应发完就关闭连接」
         /// @details    供服务器空闲巡检使用：既能把 408 之类的报文回给客户端，
         ///             又能保证回完就断开，不会把连接留在半死不活的状态
@@ -137,10 +143,9 @@ namespace Net::Server::HttpServer
         /// @note
         void closeSession() override;
 
-    protected:
         /// @brief 错误的关闭连接
         /// @details 走基类的出错关闭（不等发送队列，直接断开）
-        /// @warning 线程安全（内部 post 到 IO 线程）
+        /// @warning 线程安全（内部 post 到 IO 线程，与实现一致）
         /// @note
         void errCloseSession();
 
@@ -189,8 +194,8 @@ namespace Net::Server::HttpServer
         /// @brief 请求体的长度上限
         int maxHttpSendBufLen = 0;
 
-        /// @brief 记录请求头的长度
-        int maxHttpHeadLen = 1024 * 1;
+        /// @brief 记录请求头的长度上限（默认 8KB；请求头正常只有 1~2KB）
+        int maxHttpHeadLen = 1024 * 8;
 
         /// @brief 该发送的请求
         std::atomic<unsigned long long> reqSeq{0};
@@ -229,7 +234,7 @@ namespace Net::Server::HttpServer
                    std::shared_ptr<HandleFunction> HF = nullptr, long long timeOut = 60, long long httpTimeOut = 60,
                    long long checkTime = 60, long long httpCheckTime = 60, int maxSendBufLen = 1024 * 1024 * 10,
                    int maxHttpSendBufLen = 1024 * 1024 * 10, long long sessionTimeOut = 60,
-                   long long httpSessionTimeOut = 60, int maxHttpHeaderLen = 1024 * 3);
+                   long long httpSessionTimeOut = 60, int maxHttpHeaderLen = 1024 * 8, int maxConnections = 1024);
 
         /// @brief 析构函数
         /// @details 置停止标志、关闭监听器与全部会话，再 join 巡检线程
@@ -252,6 +257,16 @@ namespace Net::Server::HttpServer
     private:
         /// @brief 关闭所有的Http
         void closeHttpAll();
+
+        /// @brief 打开 HTTP 监听器（open / reuse_address / bind / listen）
+        /// @details 构造与 start() 共用：stop() 关掉监听器后，start() 靠它重新打开
+        /// @param[out] ec 失败原因
+        /// @return 已打开（或本次打开成功）返回 true
+        /// @note 幂等：已经打开时直接返回 true
+        bool openHttpAcceptor(boost::system::error_code& ec);
+
+        /// @brief HTTP 监听端点（构造时保存，重启时要用）
+        boost::asio::ip::tcp::endpoint epHttp;
 
         /// @brief      发起一次异步 accept
         /// @details    成功则创建会话、放进会话表并启动读循环；无论成败都会续接下一次 accept
@@ -284,8 +299,8 @@ namespace Net::Server::HttpServer
         /// @brief 记录每个 http session的请求体上限（字节，非正数时回退为 10MB）
         int maxHttpSendBufLen = 0;
 
-        /// @brief 记录每个 http session的请求体上限（字节，非正数时回退为 1KB）
-        int maxHttpHeaderLen = 1024 * 1;
+        /// @brief 记录每个 http session的请求体上限（字节，非正数时回退为 8KB）
+        int maxHttpHeaderLen = 1024 * 8;
 
         /// @brief 记录当前的运行状态
         std::atomic<bool> httpRunning = false;
@@ -303,13 +318,14 @@ namespace Net::Server::HttpServer
         /// @note
         std::condition_variable queueHttpCV;
 
-        /// @brief 标记此服务是否已经启动过了
-        std::atomic<bool> startingHttp = false;
-
         /// @brief httpAcceptor重连错误
         unsigned int httpAcceptorConnectionCount = 0;
 
         /// @brief 记录忙时的时间，超时自动踢
         long long httpSessionTimeOut = 60;
+
+        /// @brief 最大并发连接数（<=0 表示不限制）
+        /// @details 达到上限后新连接会被立刻关闭，避免句柄/内存被吃光
+        int maxConnections = 1024;
     };
 } // namespace Net::Server::HttpServer

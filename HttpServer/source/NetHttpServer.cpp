@@ -30,6 +30,11 @@ namespace Net::Server::HttpServer
             return std::string("{\"code\":1,\"msg\":\"") + msg + "\"}";
         }
 
+        /// @brief 传给基类的"发送队列上限"
+        /// @details HTTP 链路不走基类的二进制发送队列（toSend），这个值只是为满足基类构造；
+        ///          不要再把 HTTP 的报文上限传进来，两个语义完全不同
+        constexpr int kBaseSendQueueUnused = 1024 * 1024 * 10;
+
     } // namespace
 
     //========== HttpSession ==========
@@ -57,6 +62,12 @@ namespace Net::Server::HttpServer
         }
         this->maxHttpSendBufLen = (maxHttpSendBufLen > 0) ? maxHttpSendBufLen : 1024 * 1024 * 10;
 
+        // 请求头上限（非正数回退为 8KB）：原来这里漏了赋值，header_limit 一直用成员默认值
+        this->maxHttpHeadLen = (maxHttpHeaderLen > 0) ? maxHttpHeaderLen : 1024 * 8;
+
+        // 业务回调：原来漏了这一行，导致 HHF 恒为 nullptr，所有请求都回 500 "handler not set"
+        this->HHF = HF;
+
         // 创建时立即记录活动时间，防止刚建好就被巡检误判为空闲
         updateTime();
     }
@@ -83,10 +94,13 @@ namespace Net::Server::HttpServer
         // buffer 不能清：里面可能已经缓存了下一条请求的字节（HTTP pipelining）
         url = Url{};
 
-        url.seq = reqSeq.fetch_add(1);
+        // 请求号：++ 返回自增后的值（1、2、3…），必须与 httpAsyncReplay 里的比较口径一致
+        // （原来是 fetch_add(1) 返回旧值 → 每条异步回包都被判成"序号不匹配"）
+        url.seq = ++reqSeq;
 
         // 新请求开始：复位忙标记、「已回包」标记与「回完就关」标记
         busy.store(false, std::memory_order_relaxed);
+        busySince.store(0);
         replied.store(false, std::memory_order_relaxed);
         closeAfterReply.store(false, std::memory_order_relaxed);
 
@@ -237,6 +251,7 @@ namespace Net::Server::HttpServer
     {
         // 标记忙碌：请求处理期间（包括等待业务异步回包）不允许被巡检线程关掉
         busy.store(true, std::memory_order_relaxed);
+        busySince.store(Utils::Time::nowTime());   // 巡检靠它判断"忙了多久"
         updateTime();
 
         // 回调没设置：不能把连接挂死在这里，直接回 500
@@ -327,6 +342,7 @@ namespace Net::Server::HttpServer
                                         {
                                             // 无论成功还是失败，这条请求到这里都处理完了
                                             self->busy.store(false, std::memory_order_relaxed);
+                                            self->busySince.store(0);
                                             self->updateTime();
 
                                             if (ec)
@@ -400,6 +416,15 @@ namespace Net::Server::HttpServer
                           });
     }
 
+    /// @brief      兼容接口：按"当前请求"回包
+    /// @details    等价于 httpAsyncReplay(reqSeq, body, 200)，供旧代码/文档里的单参写法使用
+    /// @warning    迟到回包可能被当成下一条请求的响应，新代码请用带 seq 的重载
+    /// @note
+    void HttpSession::httpAsyncReplay(const std::string& body)
+    {
+        httpAsyncReplay(reqSeq.load(std::memory_order_relaxed), body, boost::beast::http::status::ok);
+    }
+
     /// @brief  标记本次响应发完就关闭连接
     /// @details 空闲巡检给超时会话回 408 时使用：既把提示发出去，又保证回完就断开
     /// @note   线程安全（原子标志）
@@ -453,11 +478,20 @@ namespace Net::Server::HttpServer
                            boost::asio::ip::tcp::endpoint epHttp, std::shared_ptr<HttpHandleFunction> HHF,
                            std::shared_ptr<HandleFunction> HF, long long timeOut, long long httpTimeOut,
                            long long checkTime, long long httpCheckTime, int maxSendBufLen, int maxHttpSendBufLen,
-                           long long sessionTimeOut, long long httpSessionTimeOut, int maxHttpHeaderLen)
+                           long long sessionTimeOut, long long httpSessionTimeOut, int maxHttpHeaderLen,
+                           int maxConnections)
         : Server(io, boost::asio::ip::tcp::endpoint(ep.address(), 0), HF, timeOut, checkTime, maxSendBufLen,
                  sessionTimeOut),
+          epHttp(epHttp),
           httpAcceptor(io)
     {
+        // 打开 HTTP 监听器（端口由 epHttp 决定；基类的 acceptor 只是占位，绑在端口 0 上）
+        boost::system::error_code openEc;
+        if (!openHttpAcceptor(openEc))
+        {
+            throw boost::system::system_error(openEc, "HttpServer: 打开监听端口失败");
+        }
+
         // 设置HHF回调
         this->HHF = HHF;
 
@@ -473,8 +507,13 @@ namespace Net::Server::HttpServer
         // 设置巡检时间
         this->httpCheckTime = (httpCheckTime > 0) ? httpCheckTime : 60;
 
-        // 设置会话忙时最多超时挨踢时间
-        this->httpSessionTimeOut = httpSessionTimeOut;
+        // 设置会话忙时最多超时挨踢时间（非正数回退为 60 秒）
+        if (httpSessionTimeOut <= 0)
+        {
+            Utils::Out::outErr("httpSessionTimeOut 非法（" + std::to_string(httpSessionTimeOut) +
+                               "），已回退为默认 60 秒");
+        }
+        this->httpSessionTimeOut = (httpSessionTimeOut > 0) ? httpSessionTimeOut : 60;
 
         // 判断httpTimeOut、httpCheckTime是否合法
         if (httpTimeOut <= 0 || httpCheckTime <= 0)
@@ -482,9 +521,12 @@ namespace Net::Server::HttpServer
             Utils::Out::outErr("httpTimeOut / httpCheckTime 非法，已回退为默认 60 秒");
         }
 
-        // 初始化每个 session 的请求头 / 请求体上限（非正数回退为 10MB）
+        // 初始化每个 session 的请求头 / 请求体上限
         this->maxHttpSendBufLen = (maxHttpSendBufLen > 0) ? maxHttpSendBufLen : 1024 * 1024 * 10;
-        this->maxHttpHeaderLen = (maxHttpHeaderLen > 0) ? maxHttpHeaderLen : 1024 * 1;
+        this->maxHttpHeaderLen = (maxHttpHeaderLen > 0) ? maxHttpHeaderLen : 1024 * 8;
+
+        // 最大并发连接数（非正数视为不限制）
+        this->maxConnections = maxConnections;
 
         // 判断maxHttpSendBufLen是否合法
         if (maxHttpSendBufLen <= 0)
@@ -499,15 +541,55 @@ namespace Net::Server::HttpServer
         Utils::Out::outMsg("HTTP 服务器初始化完成");
     }
 
+    /// @brief      打开 HTTP 监听器
+    /// @details    open / reuse_address / bind / listen；构造与 start() 共用
+    /// @param[out] ec 失败原因
+    /// @return      已打开（或本次打开成功）返回 true
+    /// @note        幂等：已经打开时直接返回 true，不重复 bind
+    bool HttpServer::openHttpAcceptor(boost::system::error_code& ec)
+    {
+        if (httpAcceptor.is_open())
+        {
+            ec.clear();
+            return true;
+        }
+
+        httpAcceptor.open(epHttp.protocol(), ec);
+        if (ec)
+        {
+            return false;
+        }
+
+        httpAcceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
+        if (ec)
+        {
+            return false;
+        }
+
+        httpAcceptor.bind(epHttp, ec);
+        if (ec)
+        {
+            return false;
+        }
+
+        httpAcceptor.listen(boost::asio::socket_base::max_listen_connections, ec);
+        if (ec)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     /// @brief      析构函数
     /// @details    先 stop() 停服并关闭监听器与全部会话，再 join 巡检线程
     /// @note       基类 Server 的析构随后自动执行（其中会再调一次基类 stop()，幂等且无副作用）
     HttpServer::~HttpServer()
     {
         // 判断session现在连接数，不影响正常析构
-        if (!sessions.empty())
+        if (!httpSessions.empty())
         {
-            Utils::Out::outErr("HttpSessions仍有" + std::to_string(sessions.size()) + "个会话未关闭");
+            Utils::Out::outErr("HttpSessions仍有" + std::to_string(httpSessions.size()) + "个会话未关闭");
         }
 
         // 先触发停止：置 httpRunning=false 并关闭 acceptor / 会话
@@ -528,11 +610,9 @@ namespace Net::Server::HttpServer
     /// @note 幂等：已在运行时只打印提示；stop() 后重启会先 join 掉上一轮的巡检线程
     void HttpServer::start()
     {
-        // 判断是否已经启动
-        if (startingHttp.exchange(true) || httpRunning)
+        // 判断是否已经启动（幂等：已在运行时只打印提示）
+        if (httpRunning.load())
         {
-            // http设置为正确的
-            httpRunning = true;
             Utils::Out::outMsg("HTTP 服务器已经在运行监听了");
             return;
         }
@@ -544,18 +624,12 @@ namespace Net::Server::HttpServer
             httpClearSessionThread.join();
         }
 
-        // 监听器在构造函数里开过一次，closeAll() 之后不会自动重开（见 P-02）
-        if (!httpAcceptor.is_open())
-        {
-            Utils::Out::outErr("HTTP 监听器已关闭，无法重启；请重新构造 HttpServer 对象");
-            return;
-        }
-
-        // 尝试连接
+        // 重新打开 HTTP 监听器（stop() 关过它，这里重开才支持重启）
         boost::system::error_code ec;
-        if (!openAcceptor(ec))
+        if (!openHttpAcceptor(ec))
         {
-            throw boost::system::system_error(ec, "Server监听失败");
+            Utils::Out::outErr("HTTP 监听失败：" + ec.message());
+            throw boost::system::system_error(ec, "HttpServer监听失败");
         }
 
         // 将运行状态置为true
@@ -593,7 +667,7 @@ namespace Net::Server::HttpServer
     /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
     ///             为每个新连接创建对应的 HttpSession（关闭 NoDelay）后继续接受下一个连接
     /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略
-    /// @note       accept 失败时等 100ms 重试，服务器已停止则不再重试
+    /// @note       accept 失败时按指数退避重试（上限 5s），服务器已停止则不再重试
     void HttpServer::startAccept()
     {
         // 保活 HttpServer 自身（基类 selfWeak 里存的正是本对象）
@@ -642,8 +716,8 @@ namespace Net::Server::HttpServer
                     const unsigned shift = (std::min)(httpAcceptorConnectionCount, 6u);
                     const long long delayMs = (std::min)(5000LL, 100LL << shift);
 
-                    // 等待100ms后尝试重新接受，避免出错时空转把 CPU 打满
-                    auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(100));
+                    // 按退避时长重试（100ms → 200ms → … 上限 5s），避免出错时空转把 CPU 打满
+                    auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(delayMs));
                     timer->async_wait(
                         [this, self, timer](const boost::system::error_code&)
                         {
@@ -655,12 +729,21 @@ namespace Net::Server::HttpServer
                     return;
                 }
 
+                // 连接数上限：达到上限就立刻关掉这条新连接，避免句柄/内存被吃光
+                if (maxConnections > 0 && httpSessions.size() >= static_cast<std::size_t>(maxConnections))
+                {
+                    Utils::Out::outErr("HTTP 连接数已达上限 " + std::to_string(maxConnections) + "，拒绝新连接");
+                    boost::system::error_code ignored;
+                    sock->close(ignored);
+                    startAccept();
+                    return;
+                }
+
                 // HttpSession 继承自 enable_shared_from_this，必须用 shared_ptr 管理
                 // 构造函数按值接收 socket，需 std::move(*sock)；
-                // 第 5 个参数是基类的发送队列上限，HTTP
-                // 链路不使用基类发送队列，这里复用同一个上限
-                auto session = std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut, maxHttpSendBufLen,
-                                                             maxHttpHeaderLen, maxHttpSendBufLen);
+                // 第 5 个参数是基类的发送队列上限（HTTP 不使用，用具名常量标明语义）
+                auto session = std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut,
+                                                            kBaseSendQueueUnused, maxHttpHeaderLen, maxHttpSendBufLen);
                 // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
                 session->offNoDelay();
                 // 将session放入会话表，由巡检线程统一回收
@@ -668,6 +751,8 @@ namespace Net::Server::HttpServer
                 // 启动 HTTP 读循环
                 session->start();
 
+                // 成功一次就把退避计数清零
+                httpAcceptorConnectionCount = 0;
                 // 继续接受下一个连接
                 startAccept();
             });
@@ -792,14 +877,8 @@ namespace Net::Server::HttpServer
         {
             // 加锁
             std::lock_guard<std::mutex> lock(queueHttpMutex);
-            // 判断是否已经关闭
-            if (startingHttp.exchange(false) || httpRunning)
-            {
-                // http设置为正确的
-                httpRunning = false;
-                Utils::Out::outMsg("服务器已经在运行监听了");
-                return;
-            }
+            // 无条件置停止标志（幂等；这里绝不做任何"闸门"早退，否则关闭动作会被跳过）
+            httpRunning = false;
         }
 
         // 唤醒正在周期等待的巡检线程，让它立即退出等待
@@ -808,15 +887,15 @@ namespace Net::Server::HttpServer
         // 保活，不保存引用
         auto self = std::static_pointer_cast<HttpServer>(selfWeak.lock());
 
-        if (!self)
+        // 从未启动过 / 正在析构 / IO 线程已停：投递出去也没人执行 → 就地同步关闭
+        if (!self || ioc.stopped())
         {
-            // 从未启动过，或正在析构：此时不会有别的线程再动会话表，直接同步关闭
-            closeAll();
+            closeHttpAll();
             return;
         }
 
-        // post 到 IO 线程执行关闭动作
-        boost::asio::post(ioc, [this, self]() { closeAll(); });
+        // post 到 IO 线程执行关闭动作（关的是 HTTP 自己的监听器与会话表）
+        boost::asio::post(ioc, [this, self]() { closeHttpAll(); });
     }
 
     /// @brief 关闭监听器与全部会话

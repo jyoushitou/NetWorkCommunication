@@ -14,7 +14,6 @@
 #include <functional>
 #include <atomic>
 #include <thread>
-#include <tuple> // 本文件未直接使用（历史遗留：WaitForMessage / msgQueue 已移除，该包含可删除）
 #include <ctime> // time_t（Session::lastTime）
 
 #include <boost/asio.hpp>
@@ -37,6 +36,15 @@ namespace Net
         /// @details    Session 收到内容等于该字符串的消息时，直接关闭本次会话（不再进入业务回调）
         /// @note       固定为 "EXIT"，编译期常量
         inline constexpr const char* kCloseCommand = "EXIT";
+
+        /// @brief 服务端主动通知的保留消息 ID
+        /// @details 与客户端连接测试（Net::kConnCheckMsgId = 0）区分开：
+        ///          0 = 连接测试，1 = 空闲超时提醒，2 = 忙超时提醒；业务消息建议从 1000 起
+        /// @note 协议本身不校验 ID 区间，这里只是约定
+        inline constexpr unsigned long long kServerTimeoutMsgId = 1ULL;
+
+        /// @brief 服务端忙超时提醒的保留消息 ID
+        inline constexpr unsigned long long kServerBusyTimeoutMsgId = 2ULL;
 
         /// @brief 连接会话前向声明
         class Session;
@@ -72,8 +80,8 @@ namespace Net
             /// @details    线程安全的发送入口（内部 post 到 IO 线程），向该客户端回复一条消息
             /// @param[in] msg_id 消息全局唯一ID
             /// @param[in] msg 消息序列化字符串
-            /// @warning    禁止在回调或事件循环中长时间阻塞；msg 为空时只打印错误日志并丢弃
-            /// @note
+            /// @warning    禁止在回调或事件循环中长时间阻塞；msg 为空或超过 MAX_LENGTH 时返回 false
+            /// @note       返回 false 表示未受理（空消息 / 超长），调用方可据此记日志
             bool reply(unsigned long long msg_id, const std::string& msg);
 
             /// @brief      关闭函数
@@ -92,7 +100,7 @@ namespace Net
             /// @brief      判断是否超时
             /// @details    以最后一次活动时间 lastTime 为基准，与 timeout 比较
             /// @return     true超时，false未超时
-            /// @note       由服务器监控线程在 IO 线程内调用
+            /// @note       由巡检线程 post 到 IO 线程后调用
             bool timeOut();
 
             /// @brief 同步硬关闭（不清队列、不等待）
@@ -110,6 +118,25 @@ namespace Net
             /// @return
             bool busyTimedOut(long long limitSec) const;
 
+            /// @brief 是否超过优雅关闭宽限期
+            /// @details 已请求关闭、但 socket 还没关（对端不读数据时 async_write 永远完不成）
+            /// @warning 仅在 IO 线程内调用
+            /// @note
+            bool needForceClose(long long graceSec);
+
+            /// @brief 强制关闭（不等发送队列，直接断开）
+            /// @warning 仅在 IO 线程内调用
+            /// @note
+            void forceClose();
+
+            /// @brief 是否可以从会话表回收（socket 已真正关闭）
+            /// @warning 仅在 IO 线程内调用
+            /// @note 与 isClosed() 的区别：isClosed() 在"刚请求关闭"时就为真
+            bool needReclaim()
+            {
+                return !socket.is_open();
+            }
+
         protected:
             /// @brief      业务处理
             /// @details    收到消息后的具体业务实现，由基类回调触发：内容为 kCloseCommand 时关闭会话，
@@ -123,7 +150,7 @@ namespace Net
             /// @brief      更新连接时间
             /// @details    刷新 lastTime，供超时巡检使用，避免空闲连接长期占线
             /// @note       重写基类虚函数；在每次读写操作后由基类调用，也可手动调用
-            void updateTime();
+            void updateTime() override;
 
             /// @brief 重写关闭最后的流程
             /// @details 用于在session最后关闭时销毁其他动态数据
@@ -133,6 +160,11 @@ namespace Net
 
             /// @brief 是否正在处理请求（避免巡检线程误杀正在等待业务返回的会话）
             std::atomic<bool> busy = false;
+
+            /// @brief 进入忙状态的时刻（秒），供 busyTimedOut() 计算忙了多久
+            /// @details 采用原子时间戳，0 表示不在忙
+            /// @note 派生类（如 HttpSession）需要在置忙/复位时一并维护它
+            std::atomic<time_t> busySince = 0;
 
         private:
             // 将tosend函数降级为保护
@@ -156,16 +188,17 @@ namespace Net
             /// @brief 最后更新时间
             /// @details 记录最后一次读写活动的时间戳（秒），timeOut() 依据它判断空闲超时
             /// @note
-            std::atomic<time_t> lastTime;
+            std::atomic<time_t> lastTime{0};
 
             /// @brief 停止标志
             /// @details 标识该会话是否已被请求关闭（由 closeSession 置位）
             /// @note
             std::atomic<bool> stop = false;
 
-            /// @brief 进入忙时状态的时刻
-            /// @details 采用原子事件
-            std::atomic<time_t> busySince = 0;
+            /// @brief 请求关闭的时刻（秒），0 表示未请求关闭
+            /// @details 供 needForceClose() 计算优雅关闭已经等了多久
+            /// @note
+            std::atomic<time_t> closeReqTime{0};
         };
 
         /// @brief      服务器端
@@ -188,7 +221,7 @@ namespace Net
             /// @note
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
                    std::shared_ptr<HandleFunction> HF = nullptr, long long timeOut = 60, long long checkTime = 60,
-                   int maxSendBufLen = 1024 * 1024 * 10, long long sessionTimeOut = 60);
+                   int maxSendBufLen = 1024 * 1024 * 10, long long sessionTimeOut = 60, int maxConnections = 1024);
 
             /// @brief      析构函数
             /// @details    先 stop() 停服并关闭所有会话，再 join 监控线程
@@ -241,14 +274,14 @@ namespace Net
             /// @details 为了支持重启的重连
             /// @param[out] ec 错误码
             /// @return 返回连接的状态
-            bool openAcceptor(boost::system::error_code ec);
+            bool openAcceptor(boost::system::error_code& ec);
 
         private:
             /// @brief      开始接受连接
             /// @details    在 io_context 线程中被调用，异步等待并接受客户端连接，
             ///             为每个新连接创建 Session（关闭 NoDelay）后继续接受下一个连接
             /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略
-            /// @note       accept 失败时等 100ms 重试，服务器已停止则不再重试
+            /// @note       accept 失败时按指数退避重试（上限 5s），服务器已停止则不再重试
             void startAccept();
 
             /// @brief      监控线程主体
@@ -297,14 +330,15 @@ namespace Net
             /// @details 下发给每个新建 Session 的发送队列积压上限，单位字节（非正数时回退为 10MB）
             int maxSendBufLen = 0;
 
-            /// @brief 标记此服务是否已经启动过了
-            std::atomic<bool> starting = false;
-
             /// @brief 记录重试次数
             unsigned int acceptorConnectionCount = 0;
 
             /// @brief 记录会话忙时回包等待时间
             long long sessionTimeOut = 60;
+
+            /// @brief 最大并发连接数（<=0 表示不限制）
+            /// @details 达到上限后新连接会被立刻关闭，避免句柄/内存被吃光
+            int maxConnections = 1024;
         };
     } // namespace Server
 } // namespace Net

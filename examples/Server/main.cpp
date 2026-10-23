@@ -58,10 +58,30 @@ int main()
     auto server = std::make_shared<Net::Server::Server>(io, ep, handler, 60, 60, 1024 * 1024 * 100);
 
     // 注册优雅退出回调：收到退出信号时停止服务器
-    Utils::Exit::registerStopCallback([server]() { server->stop(); });
+    // 用 weak_ptr 捕获：全局回调表没有反注册接口，按值捕获 shared_ptr 会让 Server 活过 main，
+    // 于是在 io_context 销毁之后才析构 acceptor —— 那是 Asio 的经典 UB
+    std::weak_ptr<Net::Server::Server> weakServer = server;
+    Utils::Exit::registerStopCallback(
+        [weakServer]()
+        {
+            if (auto s = weakServer.lock())
+            {
+                s->stop();
+            }
+        });
 
     // 启动服务器（内部启动失效会话监控线程，并开始 accept）
-    server->start();
+    // 注意：start() 会抛异常（端口被占用等），必须接住，否则未捕获异常直接 terminate
+    try
+    {
+        server->start();
+    }
+    catch (const std::exception& e)
+    {
+        Utils::Out::outErr(std::string("服务器启动失败（端口 ") + std::to_string(ListenPort) +
+                           " 可能已被占用）：" + e.what());
+        return -1;
+    }
 
     Utils::Out::outMsg("服务器启动，监听端口 " + std::to_string(ListenPort) + " ...等待连接中");
 
@@ -93,6 +113,9 @@ int main()
 
     // 等待 IO 线程结束
     io_thread.join();
+
+    // 关键：让 Server 先于 io_context 析构（io 是 main 的局部变量，销毁顺序在其后）
+    server.reset();
 
     Utils::Out::outMsg("服务器退出");
 

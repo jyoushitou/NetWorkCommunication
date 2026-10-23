@@ -20,8 +20,8 @@ namespace Net
         /// @note       基类的读取流程幂等（started 标志），但本函数每次调用都会再发一条测试消息
         void Client::start()
         {
-            // 发出连接测试请求
-            toSend(0, "check connection");
+            // 发出连接测试请求（保留 ID 0，见 Net::kConnCheckMsgId）
+            toSend(Net::kConnCheckMsgId, "check connection");
 
             Utils::Out::outMsg("客户端发出连接测试请求");
 
@@ -168,7 +168,7 @@ namespace Net
         /// @details    从外部线程安全调用，向 IO 线程投递关闭请求，不丢弃发送队列中待发的消息
         /// @warning    异步执行，调用后连接最终断开
         /// @note       内部即基类 stopToClose()，幂等
-        void Client::Stop()
+        void Client::stop()
         {
             stopToClose();
         }
