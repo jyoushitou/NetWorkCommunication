@@ -241,7 +241,7 @@ namespace Net
             /// @details 为了支持重启的重连
             /// @param[out] ec 错误码
             /// @return 返回连接的状态
-            bool openAcceptor(boost::system::error_code ec);
+            bool openAcceptor(boost::system::error_code& ec);
 
         private:
             /// @brief      开始接受连接

@@ -246,7 +246,7 @@ namespace Net
             Utils::Out::outMsg("服务器对象初始化完成");
         }
 
-        bool Server::openAcceptor(boost::system::error_code ec)
+        bool Server::openAcceptor(boost::system::error_code& ec)
         {
             if (acceptor.is_open())
             {
@@ -324,6 +324,8 @@ namespace Net
             boost::system::error_code ec;
             if (!openAcceptor(ec))
             {
+                // ec 现在按引用传出，异常消息里能看到真实原因（如 address in use）
+                Utils::Out::outErr("Server 监听失败：" + ec.message());
                 throw boost::system::system_error(ec, "Server监听失败");
             }
 
