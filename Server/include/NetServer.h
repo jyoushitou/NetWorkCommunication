@@ -38,6 +38,15 @@ namespace Net
         /// @note       固定为 "EXIT"，编译期常量
         inline constexpr const char* kCloseCommand = "EXIT";
 
+        /// @brief 服务端主动通知的保留消息 ID
+        /// @details 与客户端连接测试（Net::kConnCheckMsgId = 0）区分开：
+        ///          0 = 连接测试，1 = 空闲超时提醒，2 = 忙超时提醒；业务消息建议从 1000 起
+        /// @note 协议本身不校验 ID 区间，这里只是约定
+        inline constexpr unsigned long long kServerTimeoutMsgId = 1ULL;
+
+        /// @brief 服务端忙超时提醒的保留消息 ID
+        inline constexpr unsigned long long kServerBusyTimeoutMsgId = 2ULL;
+
         /// @brief 连接会话前向声明
         class Session;
 

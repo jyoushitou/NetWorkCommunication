@@ -35,6 +35,13 @@ namespace Net
     /// @note
     constexpr int MAX_LENGTH = 1024 * 1024;
 
+    /// @brief      保留消息 ID：连接测试
+    /// @details    客户端连接成功后发的那条 "check connection" 用它；
+    ///             服务端超时提醒用 Net::Server::kServerTimeoutMsgId(1)/kServerBusyTimeoutMsgId(2)，
+    ///             业务消息建议从 1000 起
+    /// @note       协议本身不校验 ID 区间，这里只是约定
+    inline constexpr unsigned long long kConnCheckMsgId = 0ULL;
+
     /// @brief      消息体缓存
     /// @details    收发数据共用的逻辑层缓冲区，统一管理缓冲区指针、总长度、读取位置与消息ID，
     ///             派生出 RecvNode（接收）与 SendNode（发送）

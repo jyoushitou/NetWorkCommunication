@@ -585,7 +585,7 @@ namespace Net
                                                   {
                                                       Utils::Out::outErr("回包时间过长");
                                                       // 发不发得出去都要关：原来只在发送成功时才关，失败会让这条连接永久占着
-                                                      it->reply(1, "bussing timeout");
+                                                      it->reply(kServerBusyTimeoutMsgId, "bussing timeout");
                                                       it->closeSession();
                                                   }
                                                   continue;
@@ -594,7 +594,7 @@ namespace Net
                                               try
                                               {
                                                   // 回复提醒消息
-                                                  it->reply(0LL, "长时间未发送，关闭连接");
+                                                  it->reply(kServerTimeoutMsgId, "长时间未发送，关闭连接");
                                               }
                                               catch (const std::exception& e)
                                               {

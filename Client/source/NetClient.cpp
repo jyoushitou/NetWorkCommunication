@@ -20,8 +20,8 @@ namespace Net
         /// @note       基类的读取流程幂等（started 标志），但本函数每次调用都会再发一条测试消息
         void Client::start()
         {
-            // 发出连接测试请求
-            toSend(0, "check connection");
+            // 发出连接测试请求（保留 ID 0，见 Net::kConnCheckMsgId）
+            toSend(Net::kConnCheckMsgId, "check connection");
 
             Utils::Out::outMsg("客户端发出连接测试请求");
 
