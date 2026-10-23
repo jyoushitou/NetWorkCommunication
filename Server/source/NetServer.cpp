@@ -99,7 +99,7 @@ namespace Net
             if (msg.empty())
             {
                 Utils::Out::outErr("消息为空或者消息id错误");
-                return;
+                return false;
             }
 
             if (msg.size() > static_cast<std::size_t>(MAX_LENGTH))
@@ -113,6 +113,8 @@ namespace Net
 
             // 发送数据
             toSend(msg_id, msg);
+
+            return true;
         }
 
         /// @brief      关闭函数
