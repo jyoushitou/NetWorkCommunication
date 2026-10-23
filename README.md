@@ -25,11 +25,13 @@
 - 发送队列自动串行化，`sending` 标志避免并发写 socket；`stopToClose()` 会先发完队列再关闭（优雅关闭），`errToClose()` 则直接清空队列立即关闭
 - 独立的发送/接收缓冲区类（`MsgNode` / `RecvNode` / `SendNode`）
 - 连接基类 `Net::Connection`（继承 `enable_shared_from_this`），封装 `readHead` / `readBody` / `doSend` / `send` / `toSend` / `stopToClose` / `errToClose` / `offNoDelay`（内部经 `connectionClose` → `continueClose` → `socketClose` 完成关闭），`toSend` 对空消息 / 超长消息返回 `false`（不再抛异常）
-- 服务端 `Net::Server::Server`：`start()` 同时启动监听与失效会话监控线程，`Stop()` 幂等优雅退出
-- 服务端会话 `Net::Server::Session`：回调式业务处理（`HandleFunction` 签名为 `void(const std::shared_ptr<Session>&, const unsigned long long&, const std::string&)`，回调内调用 `session->reply(msg_id, msg)` 回复），空闲超时自动断开（默认 60s），收到关闭命令 `"EXIT"`（`kCloseCommand`）即关闭会话
-- 客户端 `Net::Client::Client`：`Connect()` 异步解析并连接（`resolver` 为成员保证生命周期），连接成功后 `start()` 先发送 ID 为 0 的 `"check connection"` 测试消息再开始读
+- 服务端 `Net::Server::Server`：`start()` 打开监听器并启动失效会话监控线程，`stop()` 幂等优雅退出（可重复调用；`stop()` 之后还能再次 `start()` 重新监听）；`stop()` **第一次调用就真正关闭**（关 acceptor + 关会话），析构阶段也会同步收尾
+- 服务端会话 `Net::Server::Session`：回调式业务处理（`HandleFunction` 签名为 `void(const std::shared_ptr<Session>&, const unsigned long long&, const std::string&)`，回调内调用 `session->reply(msg_id, msg)` 回复；`reply` 返回 `bool`，超长/空消息返回 `false`），空闲超时自动断开（默认 60s），优雅关闭超过 30s 宽限期后强制断开，收到关闭命令 `"EXIT"`（`kCloseCommand`）即关闭会话
+- 服务端支持**最大并发连接数**（`maxConnections`，默认 1024，达到上限直接拒绝新连接）与**保留消息 ID**（0 = 连接测试、1 = 空闲超时提醒、2 = 忙超时提醒，业务建议从 1000 起）
+- 客户端 `Net::Client::Client`：`Connect()` 异步解析并连接（`resolver` 为成员保证生命周期），连接成功后 `start()` 先发送 ID 为 `Net::kConnCheckMsgId`（0）的 `"check connection"` 测试消息再开始读；`toSend` / `stop` 均线程安全
 - 客户端支持独立的关闭回调 `Net::Client::CloseFunction`（`std::function<void(const boost::system::error_code)>`），解析 / 连接失败或出错时通知业务侧，内部 `closeNotifiedByUser` 保证最多回调一次
-- 客户端支持多连接并行：每连接独立 `io_context` + 独立 `io_thread`；同一个 `io_context` 只允许由一个线程 `run()`，须先 `Connect()` 再启动 IO 线程
+- 客户端支持多连接并行：每连接独立 `io_context` + 独立 `io_thread`；同一个 `io_context` 只允许由一个线程 `run()`，须先 `Connect()` 再启动 IO 线程（示例中共享的 `clients` 容器由互斥量保护）
+- **HTTP 服务端 `Net::Server::HttpServer`**（基于 Boost.Beast，另需 `boost-beast` / `boost-json`）：`HttpSession` 继承 TCP 的 `Session`，两段式读请求（头 → body，按 `parser->is_done()` 判断，chunked 也正确）、keep-alive 复用、一条请求只回一个响应、请求号配对防止迟到回包串到下一条请求；`httpReplay(body, status)` 同步回包、`httpAsyncReplay(seq, body, status)` 线程安全异步回包，空闲超时回 408、忙超时回 503
 - `Common` / `Utils` / `Net` 分层命名，构建期别名与安装后导出名一致，支持 `find_package(CommonNet)` 复用
 - 强制 x64 构建兜底校验（避免与 vcpkg x64 依赖混编报 `LNK1112`）
 
@@ -66,13 +68,20 @@ NetWorkCommunication/
 │   ├── include/
 │   │   └── NetClient.h          # Client 声明
 │   └── source/
-│       └── NetClient.cpp        # 异步连接（成员 resolver）、消息回调、Stop
+│       └── NetClient.cpp        # 异步连接（成员 resolver）、消息回调、stop
+├── HttpServer/                  # HTTP 服务端库源码（提交，基于 Boost.Beast）
+│   ├── include/
+│   │   └── NetHttpServer.h      # HttpSession / HttpServer 声明
+│   └── source/
+│       └── NetHttpServer.cpp    # 请求解析、keep-alive、同步/异步回包、HTTP 巡检线程
 ├── examples/                    # 示例程序入口（提交）
-│   ├── CMakeLists.txt           # Server / Client 示例可执行文件定义
+│   ├── CMakeLists.txt           # Server / Client / HttpServer 三个示例可执行文件定义
 │   ├── Server/
-│   │   └── main.cpp             # 服务端示例入口，业务回调 + Utils 优雅退出
-│   └── Client/
-│       └── main.cpp             # 客户端示例入口，控制台输入发送 + Utils 优雅退出
+│   │   └── main.cpp             # TCP 服务端示例，业务回调 + Utils 优雅退出
+│   ├── Client/
+│   │   └── main.cpp             # TCP 客户端示例，控制台输入发送 + Utils 优雅退出
+│   └── Httpserver/
+│       └── main.cpp             # HTTP 服务端示例，演示同步回包与异步回包（/slow）
 ├── cmake/
 │   └── CommonNetConfig.cmake.in # 安装包配置模板（find_package(CommonNet) 用）（提交）
 ├── lib/                         # 预留目录：本地第三方二进制/依赖，不提交（当前构建不使用）
@@ -142,7 +151,8 @@ cmake --build build --config Debug
 | `CommonNetCore`     | 静态库     | 协议 / 连接核心（`connon/source/NetConnection.cpp`），链接 `CommonUtils`                    |
 | `CommonNetServer`   | 静态库     | 服务端（`Server/source/NetServer.cpp`），链接 `CommonNetCore`                               |
 | `CommonNetClient`   | 静态库     | 客户端（`Client/source/NetClient.cpp`），链接 `CommonNetCore`                               |
-| `Server` / `Client` | 可执行文件 | 示例程序，位于构建目录 `examples/` 下（`-DCOMMONNET_BUILD_EXAMPLES=OFF` 可关闭）            |
+| `CommonNetHttpServer` | 静态库   | HTTP 服务端（`HttpServer/source/NetHttpServer.cpp`），链接 `CommonNetServer` + `Boost::beast` / `Boost::json`（`-DCOMMONNET_BUILD_HTTP_SERVER=OFF` 可关闭） |
+| `Server` / `Client` / `HttpServer` | 可执行文件 | 示例程序，位于构建目录 `examples/` 下（`-DCOMMONNET_BUILD_EXAMPLES=OFF` 可关闭） |
 
 > **命名层级**：`Common`(大功能) → `Utils` / `Net`(小功能) → `Core` / `Server` / `Client`(具体库)。
 > **CMake 别名**（构建期别名与安装后导出名一致）：`Common::Utils`、`Common::Net::Core`、`Common::Net::Server`、`Common::Net::Client`。
@@ -194,6 +204,19 @@ target_link_libraries(你的目标 PRIVATE Common::Net::Core)
 ./build/examples/Client
 ```
 
+HTTP 示例服务端（监听 27080，`-DCOMMONNET_BUILD_HTTP_SERVER=OFF` 时不生成）：
+
+```bash
+# Windows
+./build/examples/Debug/HttpServer.exe
+# Linux
+./build/examples/HttpServer
+
+# 另开终端验证
+curl http://127.0.0.1:27080/          # 同步回包：{"code":0,"msg":"ok","target":"/"}
+curl http://127.0.0.1:27080/slow      # 异步回包：约 500ms 后返回
+```
+
 ## 使用示例
 
 ### 服务端
@@ -218,15 +241,37 @@ auto handler = std::make_shared<Net::Server::HandleFunction>(
             session->reply(msg_id, "服务器已经收到消息");
         });
 
-// 创建服务器：Server(io, ep, HF, timeOut=60, checkTime=60, maxSendBufLen=10MB)
-// timeOut 为会话空闲超时秒数，checkTime 为巡检周期秒数，maxSendBufLen 为单会话发送队列上限
+// 创建服务器：Server(io, ep, HF,
+//                     timeOut=60,        // 会话空闲超时（秒）
+//                     checkTime=60,      // 巡检周期（秒）
+//                     maxSendBufLen=10MB,// 单会话发送队列积压上限
+//                     sessionTimeOut=60, // 忙超时（供派生类使用）
+//                     maxConnections=1024) // 最大并发连接数，<=0 表示不限制
 auto server = std::make_shared<Net::Server::Server>(io, ep, handler, 60, 60, 1024 * 1024 * 100);
 
 // 注册优雅退出回调（Ctrl+C / 关窗时由 Utils::Exit 触发）
-Utils::Exit::registerStopCallback([server]() { server->Stop(); });
+// 用 weak_ptr 捕获：全局回调表没有反注册接口，按值捕获 shared_ptr 会让 Server 活过 main，
+// 从而在 io_context 销毁之后才析构 acceptor（Asio 的经典 UB）
+std::weak_ptr<Net::Server::Server> weakServer = server;
+Utils::Exit::registerStopCallback(
+    [weakServer]()
+    {
+        if (auto s = weakServer.lock())
+        {
+            s->stop();
+        }
+    });
 
-// 启动：内部启动失效会话监控线程并开始 accept
-server->start();
+// 启动：打开监听器、启动失效会话监控线程并开始 accept；端口被占用等情况会抛 std::exception
+try
+{
+    server->start();
+}
+catch (const std::exception& e)
+{
+    Utils::Out::outErr(std::string("服务器启动失败（端口可能已被占用）：") + e.what());
+    return -1;
+}
 
 // 网络线程
 std::thread io_thread([&io] { io.run(); });
@@ -234,9 +279,12 @@ std::thread io_thread([&io] { io.run(); });
 // 主线程阻塞等待退出信号
 Utils::Exit::waitExit();
 
-// 停止服务器（幂等，可安全重复调用）
-server->Stop();
+// 停止服务器（幂等；内部会关闭监听器与全部会话）
+server->stop();
 io_thread.join();
+
+// 让 Server 先于 io_context 析构
+server.reset();
 ```
 
 ### 客户端
@@ -272,10 +320,15 @@ client->Connect();
 std::thread io_thread([&io] { io.run(); });
 
 // 发送消息（显式指定消息 ID，线程安全，内部 post 到 IO 线程）
-client->toSend(1, "hello server");
+// toSend 返回 bool：false 表示消息非法（空 / 超过 MAX_LENGTH）；
+// 发送队列积压超限会在 IO 线程内丢弃并记日志，不会再抛异常
+if (!client->toSend(1, "hello server"))
+{
+    Utils::Out::outErr("消息为空或超过长度上限，未发送");
+}
 
-// 停止（幂等，向 IO 线程投递关闭请求，不丢弃已收到的消息）
-client->Stop();
+// 停止（幂等，向 IO 线程投递关闭请求，不丢弃已发队列中的消息）
+client->stop();
 
 io_thread.join();
 ```
@@ -302,6 +355,70 @@ clients.back().iot = std::thread([&io]() { io.run(); });   // 再启动 IO 线�
 ```
 
 按此模式循环创建即可扩展到任意数量的并行连接（每连接一 `io_context` + 一线程）。
+
+### HTTP 服务端
+
+`HttpServer` 在 TCP 的 `Session` / `Server` 之上叠加 Beast 的 HTTP 解析：业务只需实现 `HttpHandleFunction`，
+在回调里决定「同步回包」还是「异步回包」。
+
+```cpp
+#include "NetHttpServer.h"
+#include "Utils.h"
+
+boost::asio::io_context io;
+
+// 基类的端点是占位用的：HttpServer 自己用 epHttp 监听，基类 acceptor 不会被打开
+const boost::asio::ip::tcp::endpoint epTcp(boost::asio::ip::tcp::v4(), 0);
+const boost::asio::ip::tcp::endpoint epHttp(boost::asio::ip::tcp::v4(), 27080);
+
+auto handler = std::make_shared<Net::Server::HttpServer::HttpHandleFunction>(
+    [](const std::shared_ptr<Net::Server::HttpServer::HttpSession>& session,
+       const Net::Server::HttpServer::Url& url)
+    {
+        // url: method / target(含 query) / version / body / keep_alive / seq
+        if (url.target == "/slow")
+        {
+            // 慢业务：不要阻塞 IO 线程，切到工作线程后用「带 seq」的异步接口回包
+            auto seq = url.seq;
+            std::thread([session, seq]()
+                        {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                            session->httpAsyncReplay(seq, "{\"code\":0,\"msg\":\"slow ok\"}");
+                        }).detach();
+            return; // 回调返回时不回包，会话保持"忙"状态等这次异步回包
+        }
+
+        // 同步回包：第二个参数可指定状态码，默认 200
+        session->httpReplay("{\"code\":0,\"msg\":\"ok\"}");
+    });
+
+auto server = std::make_shared<Net::Server::HttpServer::HttpServer>(io, epTcp, epHttp, handler);
+
+try
+{
+    server->start(); // 打开 epHttp 监听器、启动 HTTP 巡检线程并开始 accept
+}
+catch (const std::exception& e)
+{
+    Utils::Out::outErr(std::string("HTTP 服务器启动失败（端口可能已被占用）：") + e.what());
+    return -1;
+}
+
+std::thread ioThread([&io] { io.run(); });
+Utils::Exit::waitExit();
+
+server->stop(); // 关闭 httpAcceptor 与全部 HTTP 会话
+ioThread.join();
+```
+
+要点：
+
+- **一条请求只回一次包**：`httpReplay` / `httpAsyncReplay` 内部有一次性守卫，重复回包会被丢弃并记日志。
+- **异步回包要带 `seq`**：`httpAsyncReplay(url.seq, body, st)` 会校验请求号，避免"迟到的回包"被当成下一条请求的响应；
+  单参数版本 `httpAsyncReplay(body)` 走"当前请求"，只适合在回调内立即调用。
+- **上限**：请求头默认 8KB（`maxHttpHeaderLen`）、请求体默认 10MB（`maxHttpSendBufLen`）、最大并发连接数默认 1024（`maxConnections`）。
+- **自动化行为**：空闲超时回 408、业务回包超时（`httpSessionTimeOut`，默认 60s）回 503 并断开、对端正常断开静默收尾。
+- `Url::body` 已由 Beast 解码（chunked 也是明文），业务无需自己处理传输编码。
 
 ## 自定义业务模块指引
 
@@ -375,10 +492,20 @@ client->toSend(1001, "查询订单: 20240001");
 
 | 场景                       | 消息 ID 用法                                                 |
 | -------------------------- | ------------------------------------------------------------ |
-| 连接测试                   | 库内部连接成功后自动 `toSend(0, "check connection")`         |
+| 连接测试                   | 库内部连接成功后自动 `toSend(Net::kConnCheckMsgId /* 0 */, "check connection")` |
+| 服务端超时提醒             | 库内部使用 `kServerTimeoutMsgId`(1) / `kServerBusyTimeoutMsgId`(2) |
 | 需要命令字区分业务         | `toSend(1001, data)` 显式指定，服务端按 ID 分发              |
 | 需要追踪一条消息的完整链路 | 发送端记录分配的 ID，服务端用同一 ID 回复                    |
 | 自动生成唯一 ID            | 调用方自行维护计数器（示例中为 `std::atomic` 的 `g_msg_id`） |
+
+保留 ID 表（定义在 `connon/include/NetConnection.h` 与 `Server/include/NetServer.h`）：
+
+| ID | 常量 | 含义 |
+| --- | --- | --- |
+| 0 | `Net::kConnCheckMsgId` | 客户端连接测试 |
+| 1 | `Net::Server::kServerTimeoutMsgId` | 服务端空闲超时提醒 |
+| 2 | `Net::Server::kServerBusyTimeoutMsgId` | 服务端忙超时提醒 |
+| ≥1000 | — | 业务消息（建议起点） |
 
 > 本库**不会**自动分配消息 ID：`toSend` / `reply` 均要求显式传入 `msg_id`，需要自增 ID 时由业务侧自行维护。
 
@@ -386,7 +513,7 @@ client->toSend(1001, "查询订单: 20240001");
 
 1. **单线程事件循环**：每个连接/服务器一个 `io_context`，所有 socket 读写都在其 IO 线程执行；业务线程通过 `boost::asio::post` 把发送 / 关闭任务投递到 IO 线程，避免数据竞争。
 
-2. **跨线程发送**：`Connection::toSend()` 先做空消息 / 超长校验（非法直接返回 `false`，不抛异常），`send()` 内部 `post` 到 socket executor，在 IO 线程中构建 `SendNode`（写 8 字节 ID + 4 字节长度 + 消息体）并入队；入队前还会校验发送队列累计长度是否超过 `maxSendBufLen`，超限则抛异常并关闭连接。
+2. **跨线程发送**：`Connection::toSend()` 先做空消息 / 超长校验（非法直接返回 `false`，不抛异常），`send()` 内部 `post` 到 socket executor，在 IO 线程中构建 `SendNode`（写 8 字节 ID + 4 字节长度 + 消息体）并入队；入队前按"整帧长度"校验发送队列累计量是否超过 `maxSendBufLen`，**超限只记日志并丢弃本条消息，绝不抛异常** —— 在 IO 线程的 handler 里抛异常会冲出 `io_context::run()`，让整个 IO 线程静默退出（现场表现为"服务突然不收消息了，进程还在"）。
 
 3. **发送队列**：`sendQueue` 保存待发送消息，`sending` 标志防止并发写；发送完成后自动取出下一条继续发送。`stopToClose()` 请求后若队列仍有数据，会先发完再关闭（优雅关闭）；异步写回调中通过比对队首节点避免 `deque` 空弹出的 Debug 断言。
 
@@ -398,10 +525,13 @@ client->toSend(1001, "查询订单: 20240001");
 
 7. **优雅退出（基于 vcpkg 的 Utils）**：
    - 通过 `Utils::Exit::registerStopCallback(...)` 注册停止函数，`Utils::Exit::waitExit()` 阻塞主线程，Ctrl+C / 关窗 / 输入结束（`Utils::Exit::recviceExit()`）时统一触发。
-   - 服务端：`Stop()` 置 `running=false`、`notify_all` 唤醒监控线程，并 `post` 到 IO 线程关闭 acceptor、逐个关闭会话；`~Server()` 先 `Stop()` 再 `join` 监控线程，避免 `std::thread` 析构时的 `std::terminate`。
-   - 客户端：`Stop()` 向 IO 线程投递关闭请求；主线程随后 `join` 各 IO 线程（示例有意**不调用** `io->stop()`，等异步操作自然结束后 `run()` 自行返回，避免丢弃在途消息）；阻塞在 `getline` 的输入线程 detach，由进程退出统一回收。销毁顺序上先 `clients.clear()` 再 `g_ios.clear()`，确保 `Client` 先于其 `io_context` 析构。
+   - 服务端：`stop()` **无条件**置 `running=false` 并 `notify_all`，然后 `post` 到 IO 线程执行 `closeAll()`（关 acceptor + 逐个关会话 + 清空会话表）；拿不到 `selfWeak`（从未启动 / 正在析构）或 `io_context` 已停止时改为**就地同步关闭**，避免任务永远不执行导致对象与监听端口泄漏。因为 `stop()` 只依赖 `running`，所以**第一次调用就真正生效**，且可重复调用。
+   - 客户端：`stop()` 向 IO 线程投递关闭请求；主线程随后 `join` 各 IO 线程（示例有意**不调用** `io->stop()`，等异步操作自然结束后 `run()` 自行返回，避免丢弃在途消息）；阻塞在 `getline` 的输入线程 detach，由进程退出统一回收。示例中共享的 `clients` 由 `g_clientsMutex` 保护，退出时**不再** `clients.clear()` / `g_ios.clear()`（detach 的输入线程可能还在访问），改为把 `g_ios` 声明在 `clients` 之前，靠静态析构的逆序保证 `io_context` 比 `Client` 活得久。
 
-8. **会话超时清理**：`Server::start()` 启动 `clearSessionThread`，每 `checkTime` 秒（默认 60，可被 `Stop()` 立即唤醒）向 IO 线程投递清理任务：对 `timeOut()` 且未关闭的会话发送提示并关闭，随后从 `sessions` 中移除已关闭会话。
+8. **会话巡检与回收**：`Server::start()` 启动 `clearSessionThread`，每 `checkTime` 秒（默认 60，可被 `stop()` 立即唤醒）向 IO 线程投递巡检任务：
+   ① 对 `timeOut()` 且未关闭的会话发一条超时提醒并 `closeSession()`；
+   ② 对"已请求关闭但 socket 还开着"且超过 `kCloseGraceSeconds`（30s）的会话强制 `errToClose()` —— 否则对端不读数据时 `async_write` 永远完不成，连接会被永久占着；
+   ③ 回收判据用 `needReclaim()`（socket 真的关了），而不是 `isClosed()`（后者在"刚请求关闭"时就为真，会导致提前放手、谁也不再关它）。
 
 ## 已知问题与修复记录
 
@@ -419,16 +549,34 @@ client->toSend(1001, "查询订单: 20240001");
 
 - **解析器生命周期问题**(`Client::Connect`):`async_resolve` 的 resolver 原为临时局部变量，异步解析期间对象销毁导致崩溃/未定义行为。已改为 `Client` 成员变量（`boost::asio::ip::tcp::resolver resolver;`）。
 
-- **Windows 控制台关闭时崩溃**:原在系统回调线程中直接调用 `Stop()`（内部 `boost::asio::post`），存在竞态风险。现由 `Utils::Exit` 统一：回调线程只设置退出事件唤醒主线程，由主线程安全执行 `Stop()` → `join()` 清理流程。
+- **Windows 控制台关闭时崩溃**:原在系统回调线程中直接调用 `stop()`（内部 `boost::asio::post`），存在竞态风险。现由 `Utils::Exit` 统一：回调线程只设置退出事件唤醒主线程，由主线程安全执行 `stop()` → `join()` 清理流程。
 - **关闭回调重复触发**:`Connection::socketClose()` 可能被 `readHead` 错误、`readBody` 错误、`stopToClose()` / `errToClose()` 等多次路径触发。已添加 `closeNotified` 标记（`std::atomic<bool>` + `exchange`），保证派生类的 `derivedToClose()` 只被调用一次。
 
 - **关闭后继续读消息**:连接正在关闭（`closing=true`）时，`readHead` 解析到的消息直接丢弃并调用 `stopToClose()` 走优雅关闭，避免对已关闭连接继续发起异步读（`readBody` 入口处也有同样的 `closing` 检查）。
 
-- **`toSend` 由抛异常改为返回 `bool`**:`Connection::toSend()` 现在对空消息 / 超长消息直接返回 `false`（不再抛异常），调用方据此判断是否入队成功即可，示例客户端的输入线程仍保留 `try/catch` 兜底。
+- **`toSend` 由抛异常改为返回 `bool`**:`Connection::toSend()` 现在对空消息 / 超长消息直接返回 `false`（不再抛异常），调用方据此判断是否入队成功即可；示例客户端已改为检查返回值并记日志，不再需要 `try/catch`。
 
-- **发送队列内存上限（`maxSendBufLen`）**:`send()` 入队前会以消息体长度累加校验积压量（`queueBufLen`），超过 `maxSendBufLen` 即抛 `std::invalid_argument("发送错误，队列内存已满")` 并关闭连接，防止对端不读取导致内存无限增长。`Server` 默认 `10MB`（非正数入参回退默认值），`Client` 由构造参数指定（示例给 `1024*1024*100`）。
+- **发送队列内存上限（`maxSendBufLen`）**:`send()` 入队前按"整帧长度"累加校验积压量（`queueBufLen`），超过 `maxSendBufLen` 时**只记日志并丢弃本条消息，不抛异常、不断连接**（抛异常会冲出 `io_context::run()`）；`queueBufLen` 在清队列 / 关闭 socket 时归零，避免计数漂移。`Server` 默认 `10MB`（非正数含负数都回退默认值），`Client` 由构造参数指定（示例给 `1024*1024*100`）。
 
 - **非 x64 平台静默混编**:VS 生成器 `-A Win32`、或在 32 位命令提示符中用 Ninja 配置都会悄悄编出 32 位产物，直到链接 vcpkg 的 x64 库才炸 `LNK1112`。已在根 CMakeLists.txt 于 `project()` 之前把平台钉成 x64，并在 `project()` 之后做 x64 兜底校验（`COMMONNET_ALLOW_NON_X64=ON` 可放行）。
+
+### 2026-10 修复批次（每个 bug 一条提交）
+
+- **服务端根本没监听配置端口**：`Server` 构造函数没把 `ep` 存进成员，`openAcceptor()` 用的是默认 endpoint（端口 0），实际绑到随机端口，客户端连配置端口必然被拒。已修正初始化列表。
+- **`stop()` 第一次调用空转**：`start()` 里的 `starting` 闸门在成功路径永不复位，`stop()` 一进来就命中早退分支直接 `return`，既不关监听器也不关会话（Ctrl+C 后退不出去、端口一直 LISTEN）。已删除 `starting`，`start()` 用 `running` 做幂等判据，`stop()` 无条件置位并调用 `closeAll()`。
+- **重启后监听器是关的**：`stop()` 关掉 acceptor 后 `start()` 从不重开。已抽出 `openAcceptor()` / `openHttpAcceptor()`，`start()` 里按需重开。
+- **监听失败的错误码丢失**：`openAcceptor(error_code ec)` 按值传参，调用方的 `ec` 永远是 success（异常消息显示 "Success"）。已改为按引用传。
+- **HTTP 服务起不来**：`httpAcceptor` 从未 `open`，`start()` 判 `is_open()` 直接返回。已补回打开逻辑。
+- **HTTP `stop()` 关错对象**：调的是基类 `Server::closeAll`，真正关 `httpAcceptor` / `httpSessions` 的 `closeHttpAll()` 没人调用。已改正。
+- **HTTP 异步回包全部被丢弃**：`url.seq = reqSeq.fetch_add(1)` 返回旧值，与 `httpAsyncReplay` 里的 `seq != reqSeq` 恒不相等。已改为 `url.seq = ++reqSeq`。
+- **HTTP 所有请求都回 500 "handler not set"**：`HttpSession` 构造函数漏了 `this->HHF = HF`，业务回调恒为空。已补上。
+- **`NetClient` 编译失败**：头文件声明 `stop()`、实现写成 `Stop()`。已统一为 `stop()`。
+- **优雅关闭无宽限期**：对端不读数据时 `async_write` 永不完成，会话被巡检提前移出 `sessions` 却永不关闭。已加 `closeReqTime` / `needForceClose` / `forceClose` / `needReclaim`（宽限 30s）。
+- **HTTP 请求头上限恒为 1KB**：构造函数收了 `maxHttpHeaderLen` 却没赋给成员 `maxHttpHeadLen`。已补上并统一默认 8KB。
+- **忙超时时间戳从未写入**：`busySince` 没有赋值点，忙会话永远不会被回收。已在置忙 / 复位处维护。
+- **无最大并发连接数**：`sessions` / `httpSessions` 无上限，句柄与内存可被吃光。已加 `maxConnections`（默认 1024）。
+- **`busySince` 可见性**：`HttpSession` 需要写基类的 `busySince`，原为 private（C2248）。已提升为 protected。
+- **示例工程**：`examples/CMakeLists.txt` 里 `HttpServer` 目标链接错成 `Client`、`common_net_options(Httpserver)` 指向不存在的目标导致配置期失败；`examples/Httpserver/main.cpp` 是空文件；`examples/Client/main.cpp` 的 `clients` 容器缺互斥保护、`toSend` 的注释还停留在"会抛异常"。均已修正（HTTP 示例现在演示同步回包 + `/slow` 异步回包）。
 
 ## 许可证
 
