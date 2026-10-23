@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <mutex>
 #include <iostream>
 #include <limits>
 
@@ -41,13 +42,18 @@ struct ClientPtr
     std::thread iot;
 };
 
-/// @brief 存储客户端数组
-std::vector<ClientPtr> clients;
-
 /// @brief 存储各连接专属的 io_context
 /// @details ClientPtr 不含 io 成员（结构体不可改），故由本全局容器统一持有
-/// @note 需保证析构晚于 clients 中对应 client，故必须在 clients.clear() 之后再清理
+/// @note 声明顺序即析构逆序：g_ios 先声明 → 后析构，保证 io_context 比 client 活得久
 std::vector<std::unique_ptr<boost::asio::io_context>> g_ios;
+
+/// @brief 保护 clients 的互斥量
+/// @details 输入线程（取指针发送）、退出回调线程与主线程（停止/回收）都会访问 clients，必须加锁
+/// @note
+std::mutex g_clientsMutex;
+
+/// @brief 存储客户端数组
+std::vector<ClientPtr> clients;
 
 /// @brief 消息ID生成器
 /// @details 连接测试固定用 0，业务消息从 1 开始自增，保证每条消息 ID 唯一
@@ -95,12 +101,16 @@ void CreateConnection(const Net::Client::HostPort& HP)
     cp.client->Connect();
 
     // 先放入数组再启动线程，避免线程拿到被移动/已销毁的对象
-    clients.push_back(std::move(cp));
+    {
+        // 加锁：此刻输入线程可能还没起来，但退出回调线程已经可能遍历 clients
+        std::lock_guard<std::mutex> lock(g_clientsMutex);
+        clients.push_back(std::move(cp));
 
-    // 每连接 1 个线程驱动自己的 io_context
-    // 注意：必须用 lambda 捕获；不能写 std::thread(io.run())
-    //       —— 那会在当前线程直接阻塞执行 run()，并把返回值交给线程
-    clients.back().iot = std::thread([&io]() { io.run(); });
+        // 每连接 1 个线程驱动自己的 io_context
+        // 注意：必须用 lambda 捕获；不能写 std::thread(io.run())
+        //       —— 那会在当前线程直接阻塞执行 run()，并把返回值交给线程
+        clients.back().iot = std::thread([&io]() { io.run(); });
+    }
 }
 
 // ============ main ============
@@ -119,6 +129,7 @@ int main()
         []()
         {
             Utils::Out::outMsg("正在关闭所有连接...");
+            std::lock_guard<std::mutex> lock(g_clientsMutex);
             for (auto& cp : clients)
             {
                 if (cp.client)
@@ -166,7 +177,17 @@ int main()
                     break;
                 }
 
-                if (clients.empty() || !clients.front().client)
+                // 取出当前连接：加锁拷贝 shared_ptr，避免与主线程/退出回调的停止、回收竞争
+                std::shared_ptr<Net::Client::Client> client;
+                {
+                    std::lock_guard<std::mutex> lock(g_clientsMutex);
+                    if (!clients.empty())
+                    {
+                        client = clients.front().client;
+                    }
+                }
+
+                if (!client)
                 {
                     Utils::Out::outErr("连接尚未建立，消息未发送");
                     continue;
@@ -175,15 +196,15 @@ int main()
                 // 自增消息ID，保证同一条消息的ID唯一
                 unsigned long long msg_id = ++g_msg_id;
 
-                try
+                // toSend 不再抛异常：返回 false 表示消息非法（空 / 超过 MAX_LENGTH）；
+                // 发送队列积压超限会在 IO 线程内丢弃并记日志
+                if (client->toSend(msg_id, line))
                 {
-                    clients.front().client->toSend(msg_id, line);
                     Utils::Out::outNetMsg(msg_id, "已发送：" + line);
                 }
-                catch (const std::exception& e)
+                else
                 {
-                    // toSend 对空消息/超长消息只返回 false；发送队列超限才会抛异常，这里兜底防止线程退出
-                    Utils::Out::outErr(std::string("发送失败：") + e.what());
+                    Utils::Out::outErr("消息为空或超过长度上限，未发送");
                 }
             }
 
@@ -197,27 +218,30 @@ int main()
 
     Utils::Out::outMsg("收到退出信号，正在关闭所有连接...");
 
-    // 请求各连接优雅关闭（Stop 内部会 post 关闭请求）
-    for (auto& cp : clients)
+    // 请求各连接优雅关闭（stop 内部会 post 关闭请求），并回收各 IO 线程
     {
-        if (cp.client)
+        std::lock_guard<std::mutex> lock(g_clientsMutex);
+        for (auto& cp : clients)
         {
-            cp.client->stop();
+            if (cp.client)
+            {
+                cp.client->stop();
+            }
+        }
+
+        // 不调用 io->stop()：等所有异步操作结束后 run() 会自然返回
+        for (auto& cp : clients)
+        {
+            if (cp.iot.joinable())
+            {
+                cp.iot.join();
+            }
         }
     }
 
-    // 不调用 io->stop()：等所有异步操作结束后 run() 会自然返回
-    for (auto& cp : clients)
-    {
-        if (cp.iot.joinable())
-        {
-            cp.iot.join();
-        }
-    }
-
-    // 各 IO 线程已结束、异步操作队列已排空，此时销毁 client 与 io_context 才是安全的
-    clients.clear();
-    g_ios.clear();
+    // 注意：这里**不要** clients.clear() / g_ios.clear()。
+    // 输入线程是 detach 的，可能还阻塞在 getline 上；销毁容器会让它访问已释放的内存。
+    // 进程即将结束，交给静态析构回收即可（g_ios 先声明 → 后析构，保证 io_context 比 client 活得久）。
 
     Utils::Out::outMsg("客户端已退出");
     return 0;
