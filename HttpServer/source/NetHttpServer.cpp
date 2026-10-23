@@ -456,8 +456,16 @@ namespace Net::Server::HttpServer
                            long long sessionTimeOut, long long httpSessionTimeOut, int maxHttpHeaderLen)
         : Server(io, boost::asio::ip::tcp::endpoint(ep.address(), 0), HF, timeOut, checkTime, maxSendBufLen,
                  sessionTimeOut),
+          epHttp(epHttp),
           httpAcceptor(io)
     {
+        // 打开 HTTP 监听器（端口由 epHttp 决定；基类的 acceptor 只是占位，绑在端口 0 上）
+        boost::system::error_code openEc;
+        if (!openHttpAcceptor(openEc))
+        {
+            throw boost::system::system_error(openEc, "HttpServer: 打开监听端口失败");
+        }
+
         // 设置HHF回调
         this->HHF = HHF;
 
@@ -497,6 +505,46 @@ namespace Net::Server::HttpServer
         httpAcceptorConnectionCount = 0;
 
         Utils::Out::outMsg("HTTP 服务器初始化完成");
+    }
+
+    /// @brief      打开 HTTP 监听器
+    /// @details    open / reuse_address / bind / listen；构造与 start() 共用
+    /// @param[out] ec 失败原因
+    /// @return      已打开（或本次打开成功）返回 true
+    /// @note        幂等：已经打开时直接返回 true，不重复 bind
+    bool HttpServer::openHttpAcceptor(boost::system::error_code& ec)
+    {
+        if (httpAcceptor.is_open())
+        {
+            ec.clear();
+            return true;
+        }
+
+        httpAcceptor.open(epHttp.protocol(), ec);
+        if (ec)
+        {
+            return false;
+        }
+
+        httpAcceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), ec);
+        if (ec)
+        {
+            return false;
+        }
+
+        httpAcceptor.bind(epHttp, ec);
+        if (ec)
+        {
+            return false;
+        }
+
+        httpAcceptor.listen(boost::asio::socket_base::max_listen_connections, ec);
+        if (ec)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// @brief      析构函数
@@ -544,18 +592,12 @@ namespace Net::Server::HttpServer
             httpClearSessionThread.join();
         }
 
-        // 监听器在构造函数里开过一次，closeAll() 之后不会自动重开（见 P-02）
-        if (!httpAcceptor.is_open())
-        {
-            Utils::Out::outErr("HTTP 监听器已关闭，无法重启；请重新构造 HttpServer 对象");
-            return;
-        }
-
-        // 尝试连接
+        // 重新打开 HTTP 监听器（stop() 关过它，这里重开才支持重启）
         boost::system::error_code ec;
-        if (!openAcceptor(ec))
+        if (!openHttpAcceptor(ec))
         {
-            throw boost::system::system_error(ec, "Server监听失败");
+            Utils::Out::outErr("HTTP 监听失败：" + ec.message());
+            throw boost::system::system_error(ec, "HttpServer监听失败");
         }
 
         // 将运行状态置为true

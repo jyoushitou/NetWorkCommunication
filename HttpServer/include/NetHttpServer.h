@@ -253,6 +253,16 @@ namespace Net::Server::HttpServer
         /// @brief 关闭所有的Http
         void closeHttpAll();
 
+        /// @brief 打开 HTTP 监听器（open / reuse_address / bind / listen）
+        /// @details 构造与 start() 共用：stop() 关掉监听器后，start() 靠它重新打开
+        /// @param[out] ec 失败原因
+        /// @return 已打开（或本次打开成功）返回 true
+        /// @note 幂等：已经打开时直接返回 true
+        bool openHttpAcceptor(boost::system::error_code& ec);
+
+        /// @brief HTTP 监听端点（构造时保存，重启时要用）
+        boost::asio::ip::tcp::endpoint epHttp;
+
         /// @brief      发起一次异步 accept
         /// @details    成功则创建会话、放进会话表并启动读循环；无论成败都会续接下一次 accept
         /// @warning    须在 io_context 运行后调用；acceptor 被关闭导致的取消错误会静默忽略
