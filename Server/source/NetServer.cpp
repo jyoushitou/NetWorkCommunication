@@ -472,8 +472,8 @@ namespace Net
                         const unsigned shift = (std::min)(acceptorConnectionCount, 6u);
                         const long long delayMs = (std::min)(5000LL, 100LL << shift);
 
-                        // 等待100ms后尝试重新连接
-                        auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(100));
+                        // 按退避时长重试（100ms → 200ms → … 上限 5s）
+                        auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(delayMs));
                         timer->async_wait(
                             [this, self, timer](const boost::system::error_code& waitEC)
                             {
@@ -538,10 +538,9 @@ namespace Net
                                                   if (it->busyTimedOut(sessionTimeOut))
                                                   {
                                                       Utils::Out::outErr("回包时间过长");
-                                                      if (it->reply(1, "bussing timeout"))
-                                                      {
-                                                          it->closeSession();
-                                                      }
+                                                      // 发不发得出去都要关：原来只在发送成功时才关，失败会让这条连接永久占着
+                                                      it->reply(1, "bussing timeout");
+                                                      it->closeSession();
                                                   }
                                                   continue;
                                               }
@@ -574,7 +573,7 @@ namespace Net
                                               // 避免后面自增
                                               continue;
                                           }
-                                          it++;
+                                          ++it;
                                       }
                                   });
             }
