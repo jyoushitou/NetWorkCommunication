@@ -30,6 +30,11 @@ namespace Net::Server::HttpServer
             return std::string("{\"code\":1,\"msg\":\"") + msg + "\"}";
         }
 
+        /// @brief 传给基类的"发送队列上限"
+        /// @details HTTP 链路不走基类的二进制发送队列（toSend），这个值只是为满足基类构造；
+        ///          不要再把 HTTP 的报文上限传进来，两个语义完全不同
+        constexpr int kBaseSendQueueUnused = 1024 * 1024 * 10;
+
     } // namespace
 
     //========== HttpSession ==========
@@ -733,10 +738,9 @@ namespace Net::Server::HttpServer
 
                 // HttpSession 继承自 enable_shared_from_this，必须用 shared_ptr 管理
                 // 构造函数按值接收 socket，需 std::move(*sock)；
-                // 第 5 个参数是基类的发送队列上限，HTTP
-                // 链路不使用基类发送队列，这里复用同一个上限
-                auto session = std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut, maxHttpSendBufLen,
-                                                             maxHttpHeaderLen, maxHttpSendBufLen);
+                // 第 5 个参数是基类的发送队列上限（HTTP 不使用，用具名常量标明语义）
+                auto session = std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut,
+                                                            kBaseSendQueueUnused, maxHttpHeaderLen, maxHttpSendBufLen);
                 // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
                 session->offNoDelay();
                 // 将session放入会话表，由巡检线程统一回收
