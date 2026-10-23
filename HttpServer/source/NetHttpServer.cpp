@@ -278,6 +278,12 @@ namespace Net::Server::HttpServer
     /// @warning    每条请求只回一次包：重复调用会把两条响应拼到同一条流上，报文会直接乱掉
     bool HttpSession::httpReplay(const std::string& body, boost::beast::http::status st)
     {
+        if (isClosed())
+        {
+            Utils::Out::outErr("会话关闭中，此次发送不发送");
+            return false;
+        }
+
         // 一条请求只允许写出一条响应报文
         if (replied.exchange(true))
         {
