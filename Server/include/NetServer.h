@@ -134,6 +134,11 @@ namespace Net
             /// @brief 是否正在处理请求（避免巡检线程误杀正在等待业务返回的会话）
             std::atomic<bool> busy = false;
 
+            /// @brief 进入忙状态的时刻（秒），供 busyTimedOut() 计算忙了多久
+            /// @details 采用原子时间戳，0 表示不在忙
+            /// @note 派生类（如 HttpSession）需要在置忙/复位时一并维护它
+            std::atomic<time_t> busySince = 0;
+
         private:
             // 将tosend函数降级为保护
             // 发送消息使用reply
@@ -162,10 +167,6 @@ namespace Net
             /// @details 标识该会话是否已被请求关闭（由 closeSession 置位）
             /// @note
             std::atomic<bool> stop = false;
-
-            /// @brief 进入忙时状态的时刻
-            /// @details 采用原子事件
-            std::atomic<time_t> busySince = 0;
         };
 
         /// @brief      服务器端
