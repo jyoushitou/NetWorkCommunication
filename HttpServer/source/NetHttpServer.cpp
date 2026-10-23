@@ -97,61 +97,78 @@ namespace Net::Server::HttpServer
         auto self = getSession();
 
         // 两段式读取的第一段：只读到请求头结束，此时 body 还没有读
-        boost::beast::http::async_read_header(socket, buffer, *parser,
-                                              [self](boost::system::error_code ec, std::size_t)
-                                              {
-                                                  // 期间已经进入关闭流程（空闲超时 / 服务器
-                                                  // stop）：结果不再有意义
-                                                  if (self->isClosed())
-                                                  {
-                                                      return;
-                                                  }
+        boost::beast::http::async_read_header(
+            socket, buffer, *parser,
+            [self](boost::system::error_code ec, std::size_t)
+            {
+                // 期间已经进入关闭流程（空闲超时 / 服务器
+                // stop）：结果不再有意义
+                if (self->isClosed())
+                {
+                    return;
+                }
 
-                                                  // 对端在 keep-alive 空闲期正常关闭，不是错误
-                                                  if (ec == boost::beast::http::error::end_of_stream)
-                                                  {
-                                                      self->closeSession();
-                                                      return;
-                                                  }
+                // 对端在 keep-alive 空闲期正常关闭，不是错误
+                if (ec == boost::beast::http::error::end_of_stream)
+                {
+                    self->closeSession();
+                    return;
+                }
 
-                                                  // 主动关闭 socket 引发的取消：正常退出流程的一部分，静默返回
-                                                  if (ec == boost::asio::error::operation_aborted)
-                                                  {
-                                                      return;
-                                                  }
+                // 主动关闭 socket 引发的取消：正常退出流程的一部分，静默返回
+                if (ec == boost::asio::error::operation_aborted)
+                {
+                    return;
+                }
 
-                                                  // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
-                                                  if (ec)
-                                                  {
-                                                      Utils::Out::outErr("HTTP 读取请求头失败：" + ec.message());
-                                                      self->errCloseSession();
-                                                      return;
-                                                  }
+                // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
+                if (ec)
+                {
+                    Utils::Out::outErr("HTTP 读取请求头失败：" + ec.message());
+                    self->errCloseSession();
+                    return;
+                }
 
-                                                  // 把请求头里的信息落到上下文里（业务层只认 Url）
-                                                  // 注意：method_string() / target() 返回 beast 的
-                                                  // string_view， 不能直接拿去构造 std::string（不同 Boost
-                                                  // 版本不保证可转换）， 统一用 assign(指针, 长度) 复制
-                                                  auto& req = self->parser->get();
-                                                  const auto methodView = req.method_string();
-                                                  const auto targetView = req.target();
-                                                  self->url.method.assign(methodView.data(), methodView.size());
-                                                  self->url.target.assign(targetView.data(), targetView.size());
-                                                  self->url.version = req.version();
-                                                  self->url.keep_alive = req.keep_alive();
-                                                  self->updateTime();
+                // 把请求头里的信息落到上下文里（业务层只认 Url）
+                // 注意：method_string() / target() 返回 beast 的
+                // string_view， 不能直接拿去构造 std::string（不同 Boost
+                // 版本不保证可转换）， 统一用 assign(指针, 长度) 复制
+                auto& req = self->parser->get();
+                const auto methodView = req.method_string();
+                const auto targetView = req.target();
+                self->url.method.assign(methodView.data(), methodView.size());
+                self->url.target.assign(targetView.data(), targetView.size());
+                self->url.version = req.version();
+                self->url.keep_alive = req.keep_alive();
+                self->updateTime();
 
-                                                  // 没有 body（GET、Content-Length: 0）→ 直接进业务
-                                                  if (self->parser->is_done())
-                                                  {
-                                                      self->handleToWork();
-                                                      return;
-                                                  }
+                // 没有 body（GET、Content-Length: 0）→ 直接进业务
+                if (self->parser->is_done())
+                {
+                    self->handleToWork();
+                    return;
+                }
 
-                                                  // 有 body（Content-Length > 0 或 Transfer-Encoding:
-                                                  // chunked）→ 继续读
-                                                  self->readBody();
-                                              });
+                if (req[boost::beast::http::field::expect] == "100-continue")
+                {
+                    auto cont = std::make_shared<boost::beast::http::response<boost::beast::http::empty_body>>(
+                        boost::beast::http::status::continue_, self->url.version ? self->url.version : 11);
+                    boost::beast::http::async_write(self->socket, *cont,
+                                                    [self, cont](boost::system::error_code wec, std::size_t)
+                                                    {
+                                                        if (wec || self->isClosed())
+                                                        {
+                                                            return;
+                                                        }
+                                                        self->readBody();
+                                                    });
+                    return;
+                }
+
+                // 有 body（Content-Length > 0 或 Transfer-Encoding:
+                // chunked）→ 继续读
+                self->readBody();
+            });
     }
 
     /// @brief      读取消息体
