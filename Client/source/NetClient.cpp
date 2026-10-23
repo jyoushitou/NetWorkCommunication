@@ -168,7 +168,7 @@ namespace Net
         /// @details    从外部线程安全调用，向 IO 线程投递关闭请求，不丢弃发送队列中待发的消息
         /// @warning    异步执行，调用后连接最终断开
         /// @note       内部即基类 stopToClose()，幂等
-        void Client::Stop()
+        void Client::stop()
         {
             stopToClose();
         }
