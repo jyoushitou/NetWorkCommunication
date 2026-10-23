@@ -17,6 +17,13 @@ namespace Net
 {
     namespace Server
     {
+        namespace
+        {
+            /// @brief 优雅关闭的宽限期（秒）：超过则强制断开
+            /// @details 对端不读数据时 async_write 永远完不成，优雅关闭会一直挂着
+            constexpr long long kCloseGraceSeconds = 30;
+        } // namespace
+
         /// @brief      构造函数
         /// @details    session的构造：接管 socket，保存业务回调、超时时间与发送上限，并初始化活动时间
         /// @param[in] io 连接的io_context
@@ -128,6 +135,8 @@ namespace Net
         void Session::closeSession()
         {
             stop = true;
+            // 记下请求关闭的时刻，供 needForceClose() 计算优雅关闭已经等了多久
+            closeReqTime.store(Utils::Time::nowTime());
             // 使用基类的关闭函数
             stopToClose();
         }
@@ -177,6 +186,30 @@ namespace Net
         {
             // 仅在 IO 线程内调用（socket.is_open() 非线程安全）
             return stop.load() || closing.load() || !socket.is_open();
+        }
+
+        /// @brief 是否超过优雅关闭宽限期
+        /// @details 已请求关闭、但 socket 还没关，且距请求关闭已超过 graceSec 秒
+        /// @warning 仅在 IO 线程内调用
+        /// @note
+        bool Session::needForceClose(long long graceSec)
+        {
+            if (!stop.load() || !socket.is_open())
+            {
+                return false;
+            }
+
+            const time_t req = closeReqTime.load();
+            return req != 0 && Utils::Time::computeTime(req) > graceSec;
+        }
+
+        /// @brief 强制关闭（不等发送队列）
+        /// @warning 仅在 IO 线程内调用
+        /// @note
+        void Session::forceClose()
+        {
+            Utils::Out::outErr("会话优雅关闭超过宽限期，强制断开");
+            errToClose();
         }
 
         /// @brief  是否在忙（正在处理请求，含等待业务异步回包）
@@ -563,10 +596,26 @@ namespace Net
                                           }
                                       }
 
-                                      // 检查是否关闭
+                                      // 第三轮：优雅关闭宽限期兜底（对端不读时发送队列永远发不完）
+                                      for (auto& it : sessions)
+                                      {
+                                          if (it && it->needForceClose(kCloseGraceSeconds))
+                                          {
+                                              try
+                                              {
+                                                  it->forceClose();
+                                              }
+                                              catch (...)
+                                              {
+                                                  Utils::Out::outErr("强制关闭会话时出现未知错误");
+                                              }
+                                          }
+                                      }
+
+                                      // 检查是否关闭（socket 真正关闭才回收）
                                       for (auto it = sessions.begin(); it != sessions.end();)
                                       {
-                                          if ((*it)->isClosed())
+                                          if ((*it)->needReclaim())
                                           {
                                               // 避免悬空的迭代器
                                               it = sessions.erase(it);

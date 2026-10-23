@@ -110,6 +110,25 @@ namespace Net
             /// @return
             bool busyTimedOut(long long limitSec) const;
 
+            /// @brief 是否超过优雅关闭宽限期
+            /// @details 已请求关闭、但 socket 还没关（对端不读数据时 async_write 永远完不成）
+            /// @warning 仅在 IO 线程内调用
+            /// @note
+            bool needForceClose(long long graceSec);
+
+            /// @brief 强制关闭（不等发送队列，直接断开）
+            /// @warning 仅在 IO 线程内调用
+            /// @note
+            void forceClose();
+
+            /// @brief 是否可以从会话表回收（socket 已真正关闭）
+            /// @warning 仅在 IO 线程内调用
+            /// @note 与 isClosed() 的区别：isClosed() 在"刚请求关闭"时就为真
+            bool needReclaim()
+            {
+                return !socket.is_open();
+            }
+
         protected:
             /// @brief      业务处理
             /// @details    收到消息后的具体业务实现，由基类回调触发：内容为 kCloseCommand 时关闭会话，
@@ -167,6 +186,11 @@ namespace Net
             /// @details 标识该会话是否已被请求关闭（由 closeSession 置位）
             /// @note
             std::atomic<bool> stop = false;
+
+            /// @brief 请求关闭的时刻（秒），0 表示未请求关闭
+            /// @details 供 needForceClose() 计算优雅关闭已经等了多久
+            /// @note
+            std::atomic<time_t> closeReqTime{0};
         };
 
         /// @brief      服务器端
