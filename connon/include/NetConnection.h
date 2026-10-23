@@ -42,6 +42,11 @@ namespace Net
     /// @note       协议本身不校验 ID 区间，这里只是约定
     inline constexpr unsigned long long kConnCheckMsgId = 0ULL;
 
+    /// @brief      无效消息 ID（全 1）
+    /// @details    没有 ID 的 RecvNode 用它与真实 ID 区分
+    /// @note       用 ~0ULL 而不是 -1ULL，避免 MSVC C4146（对无符号取负）告警
+    inline constexpr unsigned long long MSG_ID_INVALID = ~0ULL;
+
     /// @brief      消息体缓存
     /// @details    收发数据共用的逻辑层缓冲区，统一管理缓冲区指针、总长度、读取位置与消息ID，
     ///             派生出 RecvNode（接收）与 SendNode（发送）
@@ -89,9 +94,9 @@ namespace Net
         void setCurLen(int len);
 
         /// @brief      设置消息ID
-        /// @param[in] msg_id 消息全局唯一ID
+        /// @param[in] id 消息全局唯一ID（形参不与成员同名，避免 C4458）
         /// @note
-        void setID(unsigned long long msg_id);
+        void setID(unsigned long long id);
 
         /// @brief      获取缓存区指针
         /// @return     指向缓冲区首地址的指针

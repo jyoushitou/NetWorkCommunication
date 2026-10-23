@@ -52,10 +52,10 @@ namespace Net
     }
 
     /// @brief      构造函数（只有长度）
-    /// @details    委托到 MsgNode(msg_id, max_len)，消息ID传 -1ULL 表示无效值
+    /// @details    委托到 MsgNode(msg_id, max_len)，消息ID传 MSG_ID_INVALID（全 1）表示无效值
     /// @param[in] max_len 缓存的最大长度
-    /// @note
-    MsgNode::MsgNode(int max_len) : MsgNode(-1ULL, max_len)
+    /// @note       用 ~0ULL 而不是 -1ULL：后者对无符号取负会触发 MSVC C4146 告警
+    MsgNode::MsgNode(int max_len) : MsgNode(MSG_ID_INVALID, max_len)
     {
     }
 
@@ -115,11 +115,11 @@ namespace Net
     }
 
     /// @brief      设置消息ID
-    /// @param[in] msg_id 消息全局唯一ID
+    /// @param[in] id 消息全局唯一ID（形参不与成员同名，避免 C4458）
     /// @note
-    void MsgNode::setID(unsigned long long msg_id)
+    void MsgNode::setID(unsigned long long id)
     {
-        this->msg_id = msg_id;
+        msg_id = id;
     }
 
     /// @brief      析构函数
