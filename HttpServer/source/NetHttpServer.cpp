@@ -92,6 +92,7 @@ namespace Net::Server::HttpServer
 
         // 新请求开始：复位忙标记、「已回包」标记与「回完就关」标记
         busy.store(false, std::memory_order_relaxed);
+        busySince.store(0);
         replied.store(false, std::memory_order_relaxed);
         closeAfterReply.store(false, std::memory_order_relaxed);
 
@@ -242,6 +243,7 @@ namespace Net::Server::HttpServer
     {
         // 标记忙碌：请求处理期间（包括等待业务异步回包）不允许被巡检线程关掉
         busy.store(true, std::memory_order_relaxed);
+        busySince.store(Utils::Time::nowTime());   // 巡检靠它判断"忙了多久"
         updateTime();
 
         // 回调没设置：不能把连接挂死在这里，直接回 500
@@ -332,6 +334,7 @@ namespace Net::Server::HttpServer
                                         {
                                             // 无论成功还是失败，这条请求到这里都处理完了
                                             self->busy.store(false, std::memory_order_relaxed);
+                                            self->busySince.store(0);
                                             self->updateTime();
 
                                             if (ec)
@@ -486,8 +489,13 @@ namespace Net::Server::HttpServer
         // 设置巡检时间
         this->httpCheckTime = (httpCheckTime > 0) ? httpCheckTime : 60;
 
-        // 设置会话忙时最多超时挨踢时间
-        this->httpSessionTimeOut = httpSessionTimeOut;
+        // 设置会话忙时最多超时挨踢时间（非正数回退为 60 秒）
+        if (httpSessionTimeOut <= 0)
+        {
+            Utils::Out::outErr("httpSessionTimeOut 非法（" + std::to_string(httpSessionTimeOut) +
+                               "），已回退为默认 60 秒");
+        }
+        this->httpSessionTimeOut = (httpSessionTimeOut > 0) ? httpSessionTimeOut : 60;
 
         // 判断httpTimeOut、httpCheckTime是否合法
         if (httpTimeOut <= 0 || httpCheckTime <= 0)
