@@ -47,7 +47,7 @@ namespace Net::Server::HttpServer
     /// @note       基类拿到的是空回调：HTTP 会话绝不能走基类「读 12 字节二进制头」的链路
     HttpSession::HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                              std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen,
-                             int maxHttpSendBufLen)
+                             int maxHttpHeaderLen, int maxHttpSendBufLen)
         : Net::Server::Session(io, std::move(sock), nullptr, timeout, maxSendBufLen)
     {
         // 请求头 / 请求体上限：非正数回退为默认 10MB
@@ -76,8 +76,8 @@ namespace Net::Server::HttpServer
         // HTTP/1.1 默认 Keep-Alive：每条请求处理完后可能要复用本连接继续读下一条，
         // 这里把解析器重置为初始状态（重新 make_unique，任何 Boost 版本都兼容）
         parser = std::make_unique<boost::beast::http::request_parser<boost::beast::http::string_body>>();
-        parser->body_limit(maxHttpSendBufLen);   // 请求体上限，超了会得到 body_limit 错误
-        parser->header_limit(maxHttpSendBufLen); // 请求头上限，超了会得到 header_limit 错误
+        parser->body_limit(maxHttpSendBufLen); // 请求体上限，超了会得到 body_limit 错误
+        parser->header_limit(maxHttpHeadLen);  // 请求头上限，超了会得到 header_limit 错误
 
         // 清空上一条请求的上下文
         // buffer 不能清：里面可能已经缓存了下一条请求的字节（HTTP pipelining）
@@ -430,7 +430,7 @@ namespace Net::Server::HttpServer
                            boost::asio::ip::tcp::endpoint epHttp, std::shared_ptr<HttpHandleFunction> HHF,
                            std::shared_ptr<HandleFunction> HF, long long timeOut, long long httpTimeOut,
                            long long checkTime, long long httpCheckTime, int maxSendBufLen, int maxHttpSendBufLen,
-                           long long sessionTimeOut, long long httpSessionTimeOut)
+                           long long sessionTimeOut, long long httpSessionTimeOut, int maxHttpHeaderLen)
         : Server(io, boost::asio::ip::tcp::endpoint(ep.address(), 0), HF, timeOut, checkTime, maxSendBufLen,
                  sessionTimeOut),
           httpAcceptor(io)
@@ -461,6 +461,7 @@ namespace Net::Server::HttpServer
 
         // 初始化每个 session 的请求头 / 请求体上限（非正数回退为 10MB）
         this->maxHttpSendBufLen = (maxHttpSendBufLen > 0) ? maxHttpSendBufLen : 1024 * 1024 * 10;
+        this->maxHttpHeaderLen = (maxHttpHeaderLen > 0) ? maxHttpHeaderLen : 1024 * 1;
 
         // 判断maxHttpSendBufLen是否合法
         if (maxHttpSendBufLen <= 0)
@@ -636,7 +637,7 @@ namespace Net::Server::HttpServer
                 // 第 5 个参数是基类的发送队列上限，HTTP
                 // 链路不使用基类发送队列，这里复用同一个上限
                 auto session = std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut, maxHttpSendBufLen,
-                                                             maxHttpSendBufLen);
+                                                             maxHttpHeaderLen, maxHttpSendBufLen);
                 // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
                 session->offNoDelay();
                 // 将session放入会话表，由巡检线程统一回收

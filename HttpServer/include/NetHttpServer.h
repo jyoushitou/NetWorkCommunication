@@ -94,7 +94,7 @@ namespace Net::Server::HttpServer
         ///             shared_from_this() 会抛 std::bad_weak_ptr
         /// @note
         HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
-                    std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen,
+                    std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen, int maxHttpHeaderLen,
                     int maxHttpSendBufLen);
 
         /// @brief      开始（或继续）读取下一条 HTTP 请求
@@ -186,8 +186,11 @@ namespace Net::Server::HttpServer
         /// @brief 业务回调
         std::shared_ptr<HttpHandleFunction> HHF = nullptr;
 
-        /// @brief 请求头 / 请求体的长度上限
+        /// @brief 请求体的长度上限
         int maxHttpSendBufLen = 0;
+
+        /// @brief 记录请求头的长度
+        int maxHttpHeadLen = 1024 * 1;
 
         /// @brief 该发送的请求
         std::atomic<unsigned long long> reqSeq{0};
@@ -226,7 +229,7 @@ namespace Net::Server::HttpServer
                    std::shared_ptr<HandleFunction> HF = nullptr, long long timeOut = 60, long long httpTimeOut = 60,
                    long long checkTime = 60, long long httpCheckTime = 60, int maxSendBufLen = 1024 * 1024 * 10,
                    int maxHttpSendBufLen = 1024 * 1024 * 10, long long sessionTimeOut = 60,
-                   long long httpSessionTimeOut = 60);
+                   long long httpSessionTimeOut = 60, int maxHttpHeaderLen = 1024 * 3);
 
         /// @brief 析构函数
         /// @details 置停止标志、关闭监听器与全部会话，再 join 巡检线程
@@ -278,8 +281,11 @@ namespace Net::Server::HttpServer
         /// @brief 存储巡检线程的轮询时间（秒）
         long long httpCheckTime = 0;
 
-        /// @brief 记录每个 http session 的请求头 / 请求体上限（字节，非正数时回退为 10MB）
+        /// @brief 记录每个 http session的请求体上限（字节，非正数时回退为 10MB）
         int maxHttpSendBufLen = 0;
+
+        /// @brief 记录每个 http session的请求体上限（字节，非正数时回退为 1KB）
+        int maxHttpHeaderLen = 1024 * 1;
 
         /// @brief 记录当前的运行状态
         std::atomic<bool> httpRunning = false;
