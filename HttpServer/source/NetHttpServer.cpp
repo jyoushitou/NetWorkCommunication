@@ -566,9 +566,9 @@ namespace Net::Server::HttpServer
     HttpServer::~HttpServer()
     {
         // 判断session现在连接数，不影响正常析构
-        if (!sessions.empty())
+        if (!httpSessions.empty())
         {
-            Utils::Out::outErr("HttpSessions仍有" + std::to_string(sessions.size()) + "个会话未关闭");
+            Utils::Out::outErr("HttpSessions仍有" + std::to_string(httpSessions.size()) + "个会话未关闭");
         }
 
         // 先触发停止：置 httpRunning=false 并关闭 acceptor / 会话
@@ -695,8 +695,8 @@ namespace Net::Server::HttpServer
                     const unsigned shift = (std::min)(httpAcceptorConnectionCount, 6u);
                     const long long delayMs = (std::min)(5000LL, 100LL << shift);
 
-                    // 等待100ms后尝试重新接受，避免出错时空转把 CPU 打满
-                    auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(100));
+                    // 按退避时长重试（100ms → 200ms → … 上限 5s），避免出错时空转把 CPU 打满
+                    auto timer = std::make_shared<boost::asio::steady_timer>(ioc, std::chrono::milliseconds(delayMs));
                     timer->async_wait(
                         [this, self, timer](const boost::system::error_code&)
                         {
@@ -721,6 +721,8 @@ namespace Net::Server::HttpServer
                 // 启动 HTTP 读循环
                 session->start();
 
+                // 成功一次就把退避计数清零
+                httpAcceptorConnectionCount = 0;
                 // 继续接受下一个连接
                 startAccept();
             });
