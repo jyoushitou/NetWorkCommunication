@@ -248,7 +248,7 @@ namespace Net
         /// @note
         Server::Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
                        std::shared_ptr<HandleFunction> HF, long long timeOut, long long checkTime, int maxSendBufLen,
-                       long long sessionTimeOut)
+                       long long sessionTimeOut, int maxConnections)
             : ioc(io), ep(ep), acceptor(io)
         {
             // 给智能指针赋值
@@ -271,6 +271,9 @@ namespace Net
             this->maxSendBufLen = (maxSendBufLen > 0) ? maxSendBufLen : 1024 * 1024 * 10;
 
             this->sessionTimeOut = sessionTimeOut;
+
+            // 最大并发连接数（非正数视为不限制）
+            this->maxConnections = maxConnections;
 
             // 将运行状态初始化
             running = false;
@@ -458,6 +461,16 @@ namespace Net
 
                     if (!ec)
                     {
+                        // 连接数上限：达到上限就立刻关掉这条新连接，避免句柄/内存被吃光
+                        if (maxConnections > 0 && sessions.size() >= static_cast<std::size_t>(maxConnections))
+                        {
+                            Utils::Out::outErr("连接数已达上限 " + std::to_string(maxConnections) + "，拒绝新连接");
+                            boost::system::error_code ignored;
+                            sock->close(ignored);
+                            startAccept();
+                            return;
+                        }
+
                         // Session 继承自 enable_shared_from_this，必须用 shared_ptr 管理
                         // 构造函数按值接收 socket，需 std::move(*sock)
                         auto session = std::make_shared<Session>(ioc, std::move(*sock), HF, timeOut, maxSendBufLen);

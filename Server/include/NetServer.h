@@ -213,7 +213,7 @@ namespace Net
             /// @note
             Server(boost::asio::io_context& io, boost::asio::ip::tcp::endpoint ep,
                    std::shared_ptr<HandleFunction> HF = nullptr, long long timeOut = 60, long long checkTime = 60,
-                   int maxSendBufLen = 1024 * 1024 * 10, long long sessionTimeOut = 60);
+                   int maxSendBufLen = 1024 * 1024 * 10, long long sessionTimeOut = 60, int maxConnections = 1024);
 
             /// @brief      析构函数
             /// @details    先 stop() 停服并关闭所有会话，再 join 监控线程
@@ -327,6 +327,10 @@ namespace Net
 
             /// @brief 记录会话忙时回包等待时间
             long long sessionTimeOut = 60;
+
+            /// @brief 最大并发连接数（<=0 表示不限制）
+            /// @details 达到上限后新连接会被立刻关闭，避免句柄/内存被吃光
+            int maxConnections = 1024;
         };
     } // namespace Server
 } // namespace Net

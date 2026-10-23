@@ -470,7 +470,8 @@ namespace Net::Server::HttpServer
                            boost::asio::ip::tcp::endpoint epHttp, std::shared_ptr<HttpHandleFunction> HHF,
                            std::shared_ptr<HandleFunction> HF, long long timeOut, long long httpTimeOut,
                            long long checkTime, long long httpCheckTime, int maxSendBufLen, int maxHttpSendBufLen,
-                           long long sessionTimeOut, long long httpSessionTimeOut, int maxHttpHeaderLen)
+                           long long sessionTimeOut, long long httpSessionTimeOut, int maxHttpHeaderLen,
+                           int maxConnections)
         : Server(io, boost::asio::ip::tcp::endpoint(ep.address(), 0), HF, timeOut, checkTime, maxSendBufLen,
                  sessionTimeOut),
           epHttp(epHttp),
@@ -515,6 +516,9 @@ namespace Net::Server::HttpServer
         // 初始化每个 session 的请求头 / 请求体上限
         this->maxHttpSendBufLen = (maxHttpSendBufLen > 0) ? maxHttpSendBufLen : 1024 * 1024 * 10;
         this->maxHttpHeaderLen = (maxHttpHeaderLen > 0) ? maxHttpHeaderLen : 1024 * 8;
+
+        // 最大并发连接数（非正数视为不限制）
+        this->maxConnections = maxConnections;
 
         // 判断maxHttpSendBufLen是否合法
         if (maxHttpSendBufLen <= 0)
@@ -714,6 +718,16 @@ namespace Net::Server::HttpServer
                                 startAccept();
                             }
                         });
+                    return;
+                }
+
+                // 连接数上限：达到上限就立刻关掉这条新连接，避免句柄/内存被吃光
+                if (maxConnections > 0 && httpSessions.size() >= static_cast<std::size_t>(maxConnections))
+                {
+                    Utils::Out::outErr("HTTP 连接数已达上限 " + std::to_string(maxConnections) + "，拒绝新连接");
+                    boost::system::error_code ignored;
+                    sock->close(ignored);
+                    startAccept();
                     return;
                 }
 

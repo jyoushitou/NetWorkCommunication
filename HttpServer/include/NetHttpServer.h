@@ -234,7 +234,7 @@ namespace Net::Server::HttpServer
                    std::shared_ptr<HandleFunction> HF = nullptr, long long timeOut = 60, long long httpTimeOut = 60,
                    long long checkTime = 60, long long httpCheckTime = 60, int maxSendBufLen = 1024 * 1024 * 10,
                    int maxHttpSendBufLen = 1024 * 1024 * 10, long long sessionTimeOut = 60,
-                   long long httpSessionTimeOut = 60, int maxHttpHeaderLen = 1024 * 8);
+                   long long httpSessionTimeOut = 60, int maxHttpHeaderLen = 1024 * 8, int maxConnections = 1024);
 
         /// @brief 析构函数
         /// @details 置停止标志、关闭监听器与全部会话，再 join 巡检线程
@@ -323,5 +323,9 @@ namespace Net::Server::HttpServer
 
         /// @brief 记录忙时的时间，超时自动踢
         long long httpSessionTimeOut = 60;
+
+        /// @brief 最大并发连接数（<=0 表示不限制）
+        /// @details 达到上限后新连接会被立刻关闭，避免句柄/内存被吃光
+        int maxConnections = 1024;
     };
 } // namespace Net::Server::HttpServer
