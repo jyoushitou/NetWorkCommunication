@@ -216,8 +216,10 @@ target_link_libraries(你的目标 PRIVATE Common::Net::Server Common::Net::Clie
 配置时带上 vcpkg 工具链即可，**不需要**再传 `CMAKE_PREFIX_PATH`：包落在
 `<vcpkg>/installed/x64-windows/share/commonnet/`，vcpkg 工具链会自动把它加进搜索路径。
 
-> 端口只产出**静态库**（`BUILD_SHARED_LIBS=OFF` 写死）：Net 的公开头文件没有导出宏，
-> 动态化会编出导出表为空的 DLL，下游一链接就是成片的 `LNK2019`。
+> 端口只产出**静态库**（端口内把 `VCPKG_LIBRARY_LINKAGE` 钉成 static）：Net 的公开头文件没有导出宏，
+> 动态化会编出导出表为空的 DLL，连导入库都生成不出来，下游表现为 `LNK1104` / `LNK2019`。
+> 注意不能用 `-DBUILD_SHARED_LIBS=OFF` 硬传 —— `vcpkg_cmake_configure` 会按三元组再追加一次 `ON`，
+> 而且排在端口 `OPTIONS` 之后，硬传的 `OFF` 会被覆盖。
 > 运行时是否需要 `Utils.dll` 取决于 `utils` 包的三元组：`x64-windows` 需要（用 CMake + vcpkg
 > 工具链时 applocal 会自动拷贝），`x64-windows-static` 则全静态。
 

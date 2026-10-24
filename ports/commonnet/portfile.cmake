@@ -56,13 +56,16 @@ endif() # 源码来源判定结束
 # utils 端口在这里把 VCPKG_LIBRARY_LINKAGE 翻译成 BUILD_SHARED_LIBS，commonnet 不能
 # 照抄：Net 的公开头文件（NetConnection.h / NetServer.h / NetClient.h /
 # NetHttpServer.h）里没有任何 __declspec(dllexport) / 导出宏，动态化会编出「导出表为空」
-# 的 DLL 和配套的空导入库 —— 下游一链接就是成片的 LNK2019，而构建和打包阶段都发现不了
-# （能编出来、也能装进去，问题全推迟到使用者那里）。
+# 的 DLL —— 连导入库都生成不出来，下游链接直接 LNK1104 / LNK2019，而构建期发现不了。
 #
-# 所以这里把 BUILD_SHARED_LIBS 钉成 OFF：x64-windows 与 x64-windows-static 两个三元组
-# 拿到的都是 .lib，两者的区别只剩 utils 包自身是动态还是静态。
-# 将来若给四个库补上导出宏，把这里改回 VCPKG_LIBRARY_LINKAGE 的翻译即可。
-set(BUILD_SHARED_LIBS OFF)
+# 正确做法是把本端口的链接方式改成 static。
+# 不能给 vcpkg_cmake_configure 硬传 -DBUILD_SHARED_LIBS=OFF：helper 会按
+# ${VCPKG_LIBRARY_LINKAGE} 自动追加 -DBUILD_SHARED_LIBS=ON，且排在端口 OPTIONS 之后，
+# 硬传的 OFF 会被它覆盖（实测 x64-windows 下就在编 DLL，然后 LNK1104 失败）。
+# 改这个变量之后，helper 追加的就是 OFF。
+#
+# 将来若给四个库补上导出宏，删掉下面这一行即可恢复「跟随三元组」的行为。
+set(VCPKG_LIBRARY_LINKAGE static)
 
 
 # -----------------------------------------------------------------------------
@@ -77,7 +80,8 @@ set(BUILD_SHARED_LIBS OFF)
 vcpkg_cmake_configure( # vcpkg 提供的配置助手：自动处理 Debug/Release 两套构建目录与工具链
     SOURCE_PATH "${SOURCE_PATH}" # 源码目录：上面判定出来的路径
     OPTIONS # 传给项目 CMakeLists.txt 的缓存变量
-        -DBUILD_SHARED_LIBS=${BUILD_SHARED_LIBS} # 静态库，理由见第 2 节
+        # 注意：BUILD_SHARED_LIBS 不在这里传 —— helper 会按第 2 节改过的
+        # VCPKG_LIBRARY_LINKAGE 自动追加，而且一定排在这批 OPTIONS 之后。
         -DCOMMONNET_BUILD_EXAMPLES=OFF # 端口只出库本体：不编 examples 下的 Server/Client/HttpServer 三个示例
         -DCOMMONNET_BUILD_HTTP_SERVER=ON # 保留 HTTP 服务端库 Common::Net::HttpServer 及其公开头文件（需 boost-beast / boost-json，已在 vcpkg.json 声明）
 ) # vcpkg_cmake_configure 结束

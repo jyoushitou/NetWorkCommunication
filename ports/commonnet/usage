@@ -20,8 +20,9 @@ commonnet 提供 CMake 包配置文件，使用 find_package 即可引入：
   - find_package 时自动 find_dependency(Boost CONFIG) 与 find_dependency(Utils CONFIG)
 
 关于库类型：本端口只产出**静态库**。Net 的公开头文件没有导出宏，
-动态化会得到导出表为空的 DLL（下游必然 LNK2019），所以端口固定 BUILD_SHARED_LIBS=OFF，
-三元组是 x64-windows 还是 x64-windows-static 拿到的都是 .lib。
+动态化会得到导出表为空的 DLL（连导入库都生成不出来，下游表现为 LNK1104 / LNK2019），
+因此端口把链接方式钉成 static —— 三元组是 x64-windows 还是 x64-windows-static，
+拿到的都是 .lib。
 
 运行时是否需要 Utils.dll 取决于 utils 包的三元组：
 

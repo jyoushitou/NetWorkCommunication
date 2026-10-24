@@ -214,7 +214,13 @@ function(common_net_options target) # 定义辅助函数：给目标统一加语
         target_compile_definitions(${target} PUBLIC WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0601) # PUBLIC：不下发会让使用者踩 winsock.h/winsock2.h 冲突；_WIN32_WINNT 保证 Vista+ 的 API 声明可见
     endif() # Windows 分支结束
     if(MSVC) # 仅 MSVC 认识的编译选项（GCC/Clang 传了会报错）
-        target_compile_options(${target} PRIVATE /MP /FS /utf-8) # PRIVATE：/MP 多进程编译、/FS 串行化 PDB 写入、/utf-8 源码按 UTF-8 解析（含中文注释与字符串）
+        target_compile_options(${target} PRIVATE /MP /FS) # PRIVATE：只影响本库自身编译 —— /MP 多进程编译、/FS 串行化 PDB 写入
+        # /utf-8 必须 PUBLIC 下发给使用者：公开头文件含中文注释，且是 UTF-8（无 BOM）+ LF 换行。
+        # 使用者若按系统 ANSI（中文 Windows 是 GBK）解析，注释末尾的多字节字符会和换行组合，
+        # 把下一行代码并进注释，随后就是一片语法错误 —— 实测 vcpkg 装出来的包被下游 #include 时
+        # 报 NetServer.h(49)「必须初始化引用」，而 HandleFunction 实际在 56 行，正好差 7 行。
+        # 用生成器表达式限定只在 MSVC 下发，避免把 /utf-8 塞给 GCC/Clang 使用者。
+        target_compile_options(${target} PUBLIC $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     endif() # MSVC 分支结束
 endfunction() # common_net_options 定义结束
 
