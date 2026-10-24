@@ -1,0 +1,29 @@
+commonnet 提供 CMake 包配置文件，使用 find_package 即可引入：
+
+    find_package(CommonNet CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE Common::Net::Server Common::Net::Client)
+
+可用的导入目标：
+
+    Common::Net::Core        协议与连接（NetConnection.h）
+    Common::Net::Server      TCP 服务端（NetServer.h）
+    Common::Net::Client      TCP 客户端（NetClient.h）
+    Common::Net::HttpServer  HTTP 服务端（NetHttpServer.h，基于 Boost.Beast）
+    Common::Utils            Utils::Utils 的转发目标（日志 / 时间 / 优雅退出）
+
+导入目标已自带：
+
+  - 包含目录（Common/Net/<层>/ 下的公开头文件）
+  - C++17 语言标准要求
+  - Windows 宏：WIN32_LEAN_AND_MEAN、_WIN32_WINNT=0x0601
+  - Boost::system；HTTP 层另带 Boost::beast / Boost::json
+  - find_package 时自动 find_dependency(Boost CONFIG) 与 find_dependency(Utils CONFIG)
+
+关于库类型：本端口只产出**静态库**。Net 的公开头文件没有导出宏，
+动态化会得到导出表为空的 DLL（下游必然 LNK2019），所以端口固定 BUILD_SHARED_LIBS=OFF，
+三元组是 x64-windows 还是 x64-windows-static 拿到的都是 .lib。
+
+运行时是否需要 Utils.dll 取决于 utils 包的三元组：
+
+  - x64-windows        -> 需要 Utils.dll（用 CMake + vcpkg 工具链时 applocal 会自动拷到 exe 旁）
+  - x64-windows-static -> 全静态，无需 DLL

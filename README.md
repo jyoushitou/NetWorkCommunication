@@ -84,6 +84,12 @@ NetWorkCommunication/
 │       └── main.cpp             # HTTP 服务端示例，演示同步回包与异步回包（/slow）
 ├── cmake/
 │   └── CommonNetConfig.cmake.in # 安装包配置模板（find_package(CommonNet) 用）（提交）
+├── ports/
+│   └── commonnet/               # vcpkg 端口（上位工程用 vcpkg 安装本库）（提交）
+│       ├── vcpkg.json           # 端口清单：包名 commonnet、版本、依赖
+│       ├── portfile.cmake       # 构建脚本：本地开发用工作区源码，发布用 GitHub 标签
+│       ├── usage                # 安装后打印的使用说明
+│       └── LICENSE              # 随包安装的许可证
 ├── lib/                         # 预留目录：本地第三方二进制/依赖，不提交（当前构建不使用）
 ├── build/                       # 构建产物目录（cmake -B build），不提交，已由 .gitignore 忽略
 ├── out/                         # IDE（VS/CMake 集成）输出目录，不提交，已由 .gitignore 忽略
@@ -94,7 +100,7 @@ NetWorkCommunication/
 └── README.md
 ```
 
-> **提交约定**：`connon/`、`Server/`、`Client/`、`examples/`、`cmake/`、`CMakeLists.txt`、`README.md`、`LICENSE`、`.gitignore` 为源码与构建脚本，需要提交；`build/`、`out/`、`lib/`（本地第三方二进制，当前构建已不再使用）、`install/`、以及 `*.lib/*.exe/*.pdb` 等编译产物仅本地保留，不提交；Utils 依赖由 vcpkg 的 `utils` 包提供，无需入库。
+> **提交约定**：`connon/`、`Server/`、`Client/`、`HttpServer/`、`examples/`、`cmake/`、`ports/`、`CMakeLists.txt`、`README.md`、`LICENSE`、`.gitignore` 为源码与构建脚本，需要提交；`build/`、`out/`、`lib/`（本地第三方二进制，当前构建已不再使用）、`install/`、以及 `*.lib/*.exe/*.pdb` 等编译产物仅本地保留，不提交；Utils 依赖由 vcpkg 的 `utils` 包提供，无需入库。
 >
 > 注意：`Message.h`、`Utils.h` 属于 vcpkg 的 `utils` 包，**不位于 `connon/`**，工程通过 `Utils::Utils` 导入目标获取其包含目录。
 
@@ -163,26 +169,85 @@ cmake --build build --config Debug
 
 ### 构建期头文件交付
 
-除安装外，构建产物目录本身即是一个「lib + include」齐备的交付目录：`CommonNetStageHeaders` 自定义目标每次构建都会把三个公开头文件同步到 `.lib` 同级的 `include/` 下（平铺一份 + 分层 `Common/Net/...` 一份，用 `copy_if_different` 避免无谓重编）。
+除安装外，构建产物目录本身即是一个「lib + include」齐备的交付目录：`CommonNetStageHeaders` 自定义目标每次构建都会把四个公开头文件同步到 `.lib` 同级的 `include/` 下（平铺一份 + 分层 `Common/Net/...` 一份，用 `copy_if_different` 避免无谓重编）。
 
 ### 安装与在其他项目中使用
 
-```bash
-# 安装（头文件与库导出为 CommonNet 包）
-cmake --install build --prefix <安装目录>
+两种方式任选其一，互不影响，可以并存。
+
+#### 方式一：vcpkg 端口（推荐给上位工程）
+
+本仓库内置 vcpkg 端口（`ports/commonnet/`），装好之后上位工程不必再关心头文件路径与库搜索路径：
+
+```powershell
+# 开发方式（端口就在源码仓库里）：直接拿当前工作区当源码，改完重装即生效，免 push 免联网。
+# 注意两个 --overlay-ports 都要给：commonnet 依赖 utils，而 utils 的端口在 Utils 仓库里，
+# 只指 Net 的 ports 会让 vcpkg 报 "Could not find a port named 'utils'"。
+vcpkg install commonnet:x64-windows `
+    --overlay-ports=D:\WebService_Project\Common_CPP\Net\ports `
+    --overlay-ports=D:\WebService_Project\Common_CPP\Utils\ports
+
+# 改了 Net 源码之后必须重装，且 --no-binarycaching 不能省（否则 vcpkg 认为「已装好」直接跳过）
+vcpkg remove commonnet:x64-windows
+vcpkg install commonnet:x64-windows --no-binarycaching `
+    --overlay-ports=D:\WebService_Project\Common_CPP\Net\ports `
+    --overlay-ports=D:\WebService_Project\Common_CPP\Utils\ports
 ```
 
-安装后在别的工程里引用：
+> 不想每次都打两个 `--overlay-ports`，可以在工程里放一个 `vcpkg-configuration.json`，
+> 把两个目录写进 `"overlay-ports": [...]`，之后命令只留 `vcpkg install commonnet:x64-windows`。
+
+> **前提：Boost 已由 vcpkg 装好**（本机为 1.90.0，无需再动）：
+> `vcpkg install boost-asio:x64-windows boost-system:x64-windows boost-beast:x64-windows boost-json:x64-windows`
+>
+> `ports/commonnet/vcpkg.json` **故意没有声明** boost 依赖：一旦声明，vcpkg 会按端口树的版本
+> （当前 1.92.0）把整棵 Boost 重装一遍，而本机访问 GitHub 超时，`boost-cmake` 下载三次失败后直接
+> `BUILD_FAILED`。所以装之前先 `--dry-run` 确认计划里**只有 commonnet**（外加两个无源码的
+> `vcpkg-cmake` / `vcpkg-cmake-config`，它们不联网）。换到能联网的机器、或想让端口元数据自洽时，
+> 把那四个 boost 依赖加回 `dependencies` 即可。
+
+上位工程只要两行：
 
 ```cmake
-find_package(CommonNet REQUIRED)
+find_package(CommonNet CONFIG REQUIRED)
+target_link_libraries(你的目标 PRIVATE Common::Net::Server Common::Net::Client)
+```
+
+配置时带上 vcpkg 工具链即可，**不需要**再传 `CMAKE_PREFIX_PATH`：包落在
+`<vcpkg>/installed/x64-windows/share/commonnet/`，vcpkg 工具链会自动把它加进搜索路径。
+
+> 端口只产出**静态库**（`BUILD_SHARED_LIBS=OFF` 写死）：Net 的公开头文件没有导出宏，
+> 动态化会编出导出表为空的 DLL，下游一链接就是成片的 `LNK2019`。
+> 运行时是否需要 `Utils.dll` 取决于 `utils` 包的三元组：`x64-windows` 需要（用 CMake + vcpkg
+> 工具链时 applocal 会自动拷贝），`x64-windows-static` 则全静态。
+
+#### 方式二：直接 cmake install
+
+```powershell
+cmake -B build `
+    -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake `
+    -DCMAKE_INSTALL_PREFIX=<安装目录>
+cmake --build build --config Release --parallel
+cmake --install build --config Release
+```
+
+安装后在别的工程里引用（这时要自己给出 `CMAKE_PREFIX_PATH`）：
+
+```cmake
+find_package(CommonNet CONFIG REQUIRED)
 target_link_libraries(你的目标 PRIVATE Common::Net::Core)
 ```
 
-> 下游工程同样用 vcpkg 工具链配置（`-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`）：
-> `CommonNetConfig.cmake` 会自行 `find_dependency(Boost CONFIG COMPONENTS system)` 与 **`find_dependency(Utils CONFIG)`**，
-> 把 vcpkg 的 Boost 与 utils 包一起找回来。Utils 的库与头文件由 vcpkg 提供，
-> **不再随 CommonNet 包安装**（安装目录里只有 CommonNet 自己的三个静态库与三个公开头文件）。
+```powershell
+cmake -B build `
+    -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake `
+    -DCMAKE_PREFIX_PATH=<安装目录>
+```
+
+> 两种方式都**不把 Utils / Boost 打进包里**：`CommonNetConfig.cmake` 会自行
+> `find_dependency(Boost CONFIG COMPONENTS system)` 与 **`find_dependency(Utils CONFIG)`**，
+> 到 vcpkg 里把两者找回来。所以下游**也必须**用 vcpkg 工具链配置。
+> 安装目录里只有 CommonNet 自己的四个静态库与四个公开头文件。
 
 ### 运行
 
