@@ -1,7 +1,6 @@
 {
   "name": "commonnet",
   "version": "1.0.0",
-  "$comment": "故意不声明 boost-asio / boost-system / boost-beast / boost-json：声明后 vcpkg 会按端口树的版本（当前 1.92.0）重装整棵 Boost，而本机访问 GitHub 超时（boost-cmake 下载失败）。Boost 要求预先用 vcpkg 装好（已装 1.90.0），构建期由 Net 自己的 find_package(Boost CONFIG) 找到。换到联网环境、或想让端口自洽时，把这四个依赖加回 dependencies 即可。",
   "description": "Boost.Asio based C++ network communication library: asynchronous TCP client/server plus an HTTP server layer, exported as the CMake targets Common::Net::Core / Server / Client / HttpServer.",
   "homepage": "https://github.com/jyoushitou/NetWorkCommunication",
   "documentation": "https://github.com/jyoushitou/NetWorkCommunication#readme",
