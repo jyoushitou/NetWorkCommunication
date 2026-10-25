@@ -35,16 +35,16 @@ namespace Net
         /// @brief      会话退出关键字
         /// @details    Session 收到内容等于该字符串的消息时，直接关闭本次会话（不再进入业务回调）
         /// @note       固定为 "EXIT"，编译期常量
-        inline constexpr const char* kCloseCommand = "EXIT";
+        inline constexpr const char* CloseCommand = "EXIT";
 
         /// @brief 服务端主动通知的保留消息 ID
-        /// @details 与客户端连接测试（Net::kConnCheckMsgId = 0）区分开：
+        /// @details 与客户端连接测试（Net::CheckConnectionReturnMsgId = 0）区分开：
         ///          0 = 连接测试，1 = 空闲超时提醒，2 = 忙超时提醒；业务消息建议从 1000 起
         /// @note 协议本身不校验 ID 区间，这里只是约定
-        inline constexpr unsigned long long kServerTimeoutMsgId = 1ULL;
+        inline constexpr unsigned long long ServerTimeoutMsgId = 1ULL;
 
         /// @brief 服务端忙超时提醒的保留消息 ID
-        inline constexpr unsigned long long kServerBusyTimeoutMsgId = 2ULL;
+        inline constexpr unsigned long long ServerBusyTimeoutMsgId = 2ULL;
 
         /// @brief 连接会话前向声明
         class Session;
@@ -139,7 +139,7 @@ namespace Net
 
         protected:
             /// @brief      业务处理
-            /// @details    收到消息后的具体业务实现，由基类回调触发：内容为 kCloseCommand 时关闭会话，
+            /// @details    收到消息后的具体业务实现，由基类回调触发：内容为 CloseCommand 时关闭会话，
             ///             否则转交 HF 处理（HF 为空时也关闭会话）
             /// @param[in] msg_id 消息全局唯一ID
             /// @param[in] msg 消息序列化字符串
