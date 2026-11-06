@@ -35,6 +35,46 @@ namespace Net::Server::HttpServer
         ///          不要再把 HTTP 的报文上限传进来，两个语义完全不同
         constexpr int kBaseSendQueueUnused = 1024 * 1024 * 10;
 
+        /// @brief      把 Beast 解析出的请求头还原成原始文本
+        /// @details    输出与客户端发出的头部块一致：起始行 + 逐字段 name: value + 结尾空行，
+        ///             全部用 CRLF 分隔，不含消息体；字段顺序沿用客户端发送顺序。
+        /// @param[in] req Beast 解析得到的 request（模板化以适配不同 body 类型）
+        /// @return     形如 "GET /api/user?id=1 HTTP/1.1\r\nHost: x\r\n\r\n"
+        /// @note        字段名取自 name_string()：已知字段是 Beast 的规范拼写，未知字段保留原样
+        template <class Request>
+        std::string BuildRawHeaders(const Request& req)
+        {
+            std::string out;
+            out.reserve(256); // 常见请求头在几百字节内，预留一次即可
+
+            // 起始行：<method> <target> HTTP/<major>.<minor>
+            const auto methodView = req.method_string();
+            const auto targetView = req.target();
+            out.append(methodView.data(), methodView.size());
+            out.push_back(' ');
+            out.append(targetView.data(), targetView.size());
+            out.append(" HTTP/");
+            out.push_back(static_cast<char>('0' + (req.version() / 10) % 10)); // 11 -> '1'
+            out.push_back('.');
+            out.push_back(static_cast<char>('0' + req.version() % 10)); // 11 -> '1'
+            out.append("\r\n");
+
+            // 头部字段：逐条拼接，保持客户端发送顺序
+            for (const auto& field : req.base())
+            {
+                const auto name = field.name_string();
+                const auto value = field.value();
+                out.append(name.data(), name.size()); // 字段名
+                out.append(": ");                     // 冒号 + 一个空格，与抓包看到的一致
+                out.append(value.data(), value.size()); // 字段值（原样，不做解码）
+                out.append("\r\n");
+            }
+
+            // 头部结束的空行：区分「头结束」与「体开始」
+            out.append("\r\n");
+            return out;
+        }
+
     } // namespace
 
     //========== HttpSession ==========
@@ -150,6 +190,7 @@ namespace Net::Server::HttpServer
                 auto& req = self->parser->get();
                 const auto methodView = req.method_string();
                 const auto targetView = req.target();
+                self->url.headers = BuildRawHeaders(req); // 原始请求头：起始行 + 字段 + 结尾空行，业务层可直接读
                 self->url.method.assign(methodView.data(), methodView.size());
                 self->url.target.assign(targetView.data(), targetView.size());
                 self->url.version = req.version();

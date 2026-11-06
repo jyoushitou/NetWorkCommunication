@@ -53,7 +53,7 @@ namespace Net
 
         /// @brief      业务处理
         /// @details    收到消息后的具体业务实现，由基类回调触发：输出消息、调用回调函数并把响应回复给客户端；
-        ///             消息内容等于 kCloseCommand 时直接关闭会话
+        ///             消息内容等于 CloseCommand 时直接关闭会话
         /// @param[in] msg_id 消息全局唯一ID
         /// @param[in] msg 消息序列化字符串
         /// @warning    禁止在回调内部长时间阻塞，会阻塞asio事件循环
@@ -66,7 +66,7 @@ namespace Net
             // 获得自身指针
             auto self = getSession();
 
-            if (msg == kCloseCommand)
+            if (msg == CloseCommand)
             {
                 // 收到退出信号
                 // 关闭这次会话，最后析构交给Server的监控线程
@@ -585,7 +585,7 @@ namespace Net
                                                   {
                                                       Utils::Out::outErr("回包时间过长");
                                                       // 发不发得出去都要关：原来只在发送成功时才关，失败会让这条连接永久占着
-                                                      it->reply(kServerBusyTimeoutMsgId, "bussing timeout");
+                                                      it->reply(ServerBusyTimeoutMsgId, "bussing timeout");
                                                       it->closeSession();
                                                   }
                                                   continue;
@@ -594,7 +594,7 @@ namespace Net
                                               try
                                               {
                                                   // 回复提醒消息
-                                                  it->reply(kServerTimeoutMsgId, "长时间未发送，关闭连接");
+                                                  it->reply(ServerTimeoutMsgId, "长时间未发送，关闭连接");
                                               }
                                               catch (const std::exception& e)
                                               {

@@ -68,7 +68,7 @@ namespace Net
             /// @details    先发送 ID 为 0 的 "check connection" 测试消息，再调用基类启动异步读取流程
             /// @warning    须在socket连接建立后调用
             /// @note       基类的读取流程幂等（started 标志），但本函数每次调用都会再发一条测试消息
-            void start() override;
+            void startClient(std::string testMsg = "Check connection");
 
             /// @brief      停止函数
             /// @details    从外部线程安全调用，向 IO 线程投递关闭请求，不丢弃已发送队列中的消息

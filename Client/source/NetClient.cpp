@@ -18,12 +18,12 @@ namespace Net
         /// @details    先发送 ID 为 0 的 "check connection" 测试消息，再调用基类启动异步读取流程
         /// @warning    须在socket连接建立后调用
         /// @note       基类的读取流程幂等（started 标志），但本函数每次调用都会再发一条测试消息
-        void Client::start()
+        void Client::startClient(std::string testMsg)
         {
-            // 发出连接测试请求（保留 ID 0，见 Net::kConnCheckMsgId）
-            toSend(Net::kConnCheckMsgId, "check connection");
+            // 发出连接测试请求（保留 ID 0，见 Net::CheckConnectionReturnMsgId）
+            toSend(Net::CheckConnectionReturnMsgId, "check connection");
 
-            Utils::Out::outMsg("客户端发出连接测试请求");
+            Utils::Out::outMsg(testMsg);
 
             // 启动基类的异步读取流程（回复由消息回调处理）
             Connection::start();
