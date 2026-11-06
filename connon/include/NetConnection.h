@@ -37,10 +37,10 @@ namespace Net
 
     /// @brief      保留消息 ID：连接测试
     /// @details    客户端连接成功后发的那条 "check connection" 用它；
-    ///             服务端超时提醒用 Net::Server::kServerTimeoutMsgId(1)/kServerBusyTimeoutMsgId(2)，
+    ///             服务端超时提醒用 Net::Server::ServerTimeoutMsgId(1)/ServerBusyTimeoutMsgId(2)，
     ///             业务消息建议从 1000 起
     /// @note       协议本身不校验 ID 区间，这里只是约定
-    inline constexpr unsigned long long kConnCheckMsgId = 0ULL;
+    inline constexpr unsigned long long CheckConnectionReturnMsgId = 0ULL;
 
     /// @brief      无效消息 ID（全 1）
     /// @details    没有 ID 的 RecvNode 用它与真实 ID 区分

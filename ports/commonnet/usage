@@ -16,8 +16,16 @@ commonnet 提供 CMake 包配置文件，使用 find_package 即可引入：
   - 包含目录（Common/Net/<层>/ 下的公开头文件）
   - C++17 语言标准要求
   - Windows 宏：WIN32_LEAN_AND_MEAN、_WIN32_WINNT=0x0601
+  - MSVC 下自动带 /utf-8（公开头文件是 UTF-8 无 BOM，缺了它注释会吃掉换行）
   - Boost::system；HTTP 层另带 Boost::beast / Boost::json
   - find_package 时自动 find_dependency(Boost CONFIG) 与 find_dependency(Utils CONFIG)
+
+前置条件：本包不携带 Utils 的源码与库，utils 包必须已经装在 vcpkg 里。
+因为 utils 不是官方端口，装 commonnet 时要同时给出两个 overlay 目录：
+
+    vcpkg install commonnet:x64-windows ^
+        --overlay-ports=<Net 仓库>\ports ^
+        --overlay-ports=<Utils 仓库>\ports
 
 关于库类型：本端口只产出**静态库**。Net 的公开头文件没有导出宏，
 动态化会得到导出表为空的 DLL（连导入库都生成不出来，下游表现为 LNK1104 / LNK2019），

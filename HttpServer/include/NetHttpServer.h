@@ -38,6 +38,13 @@ namespace Net::Server::HttpServer
     /// @note
     struct Url
     {
+        /// @brief 原始请求头（起始行 + 所有头部字段 + 结尾空行，CRLF 分隔；不含消息体）
+        /// @details 由 Beast 的解析结果重建，字段顺序与客户端发送顺序一致。
+        ///          需要鉴权头 / Cookie / 自定义头时直接在这串里找，或自己按 CRLF 切分。
+        /// @note 只有在「请求头读完之后」才有值（body 读取不会改动它）；
+        ///       每条请求开始时随 Url 一起清空。
+        std::string headers;
+
         /// @brief 请求方法（"GET" / "POST" / "PUT" / "DELETE" ...）
         std::string method;
 
