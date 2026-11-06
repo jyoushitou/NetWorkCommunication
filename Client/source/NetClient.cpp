@@ -14,16 +14,38 @@ namespace Net
 {
     namespace Client
     {
-        /// @brief      开始函数
-        /// @details    先发送 ID 为 0 的 "check connection" 测试消息，再调用基类启动异步读取流程
+        /// @brief      开始函数（覆盖基类 Connection::start）
+        /// @details    Connect() 连接成功后调用它；这里只做转调，真正的动作在 startClient 里：
+        ///             先发 id=0 的测试消息，再启动基类的异步读取流程
+        /// @warning    须在socket连接建立后调用
+        /// @note        保留这个覆盖版本，是为了让「连上之后自动发测试消息」走标准的多态入口；
+        ///             业务想换第一条消息的内容，直接调 startClient("...") 即可
+        void Client::start()
+        {
+            startClient(); // 默认第一条消息是 "Check connection"
+        }
+
+        /// @brief      开始函数（自定义第一条消息）
+        /// @details    与无参版本等价，只是把使用方给的内容透传给 startClient
+        /// @param[in] testMsg 第一条消息的内容（ID 固定为 0）
+        /// @warning    须在socket连接建立后调用
+        /// @note        重载不影响多态：基类引用调用到的仍是无参版本
+        void Client::start(std::string testMsg)
+        {
+            startClient(std::move(testMsg));
+        }
+
+        /// @brief      开始函数（实际操作）
+        /// @details    先发送 ID 为 0 的测试消息（内容即 testMsg），再调用基类启动异步读取流程
         /// @warning    须在socket连接建立后调用
         /// @note       基类的读取流程幂等（started 标志），但本函数每次调用都会再发一条测试消息
         void Client::startClient(std::string testMsg)
         {
             // 发出连接测试请求（保留 ID 0，见 Net::CheckConnectionReturnMsgId）
-            toSend(Net::CheckConnectionReturnMsgId, "check connection");
+            // 消息内容由调用方决定（默认 "Check connection"）：协议只约定 ID，不校验文本
+            toSend(Net::CheckConnectionReturnMsgId, testMsg);
 
-            Utils::Out::outMsg(testMsg);
+            Utils::Out::outMsg(testMsg); // 同步打印，便于与服务端日志对齐
 
             // 启动基类的异步读取流程（回复由消息回调处理）
             Connection::start();
@@ -126,6 +148,8 @@ namespace Net
                                                                       // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
                                                                       offNoDelay();
 
+                                                                      // 走覆盖后的 Client::start()：
+                                                                      // 内部转调 startClient()，先发 id=0 的连接测试消息，再启动基类读取
                                                                       start();
                                                                   });
                                    });

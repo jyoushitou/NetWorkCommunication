@@ -41,7 +41,8 @@ namespace Net
         /// @details    继承自 Connection，负责连接服务器、收发消息并回调上层业务
         /// @warning    禁止持有裸指针，必须通过 shared_ptr 管理生命周期
         /// @warning    同一个 io_context 只允许由一个线程 run()；推荐每个 Client 配一个独立 io_context + IO 线程
-        /// @note       连接成功后 start() 会先发送一条 ID 为 0 的 "check connection" 测试消息
+        /// @note       连接成功后 start() 会先发送一条 ID 为 0 的测试消息
+        ///             （默认 "Check connection"，可用 start(testMsg) 自定义内容）
         class Client : public Connection
         {
         public:
@@ -59,13 +60,28 @@ namespace Net
 
             /// @brief      连接服务器端
             /// @details    用成员 resolver 异步解析 HP.host / HP.port，再 async_connect；
-            ///             连接成功后设置 NoDelay 并调用 start()
+            ///             连接成功后设置 NoDelay 并调用 startClient()（先发 id=0 的测试消息）
             /// @warning    须在 io_context.run() 之前调用，否则异步操作无人驱动
             /// @note       解析或连接失败会回调 CloseFunction 并关闭连接
             void Connect();
 
-            /// @brief      开始函数
-            /// @details    先发送 ID 为 0 的 "check connection" 测试消息，再调用基类启动异步读取流程
+            /// @brief      开始函数（覆盖基类 Connection::start）
+            /// @details    Connect() 连接成功后调用它，内部转调 startClient() 走默认流程
+            /// @warning    须在 socket 连接建立后调用
+            /// @note       第一条消息固定为默认值 "Check connection"；要自定义请用下面带参数的重载
+            void start() override;
+
+            /// @brief      开始函数（自定义连接后的第一条消息）
+            /// @details    与无参版本作用相同，只是允许使用方指定第一条消息的内容；
+            ///             内部同样是转调 startClient(testMsg)
+            /// @param[in] testMsg 第一条消息的内容（ID 固定为 0，供对端识别或打日志）
+            /// @warning    须在 socket 连接建立后调用
+            /// @note        新增的是重载而不是改签名，所以多态行为不变：
+            ///             通过基类 Connection 引用/指针调用的仍然是那个无参版本
+            void start(std::string testMsg);
+
+            /// @brief      开始函数（实际操作）
+            /// @details    先发送 ID 为 0 的测试消息（内容就是 testMsg），再调用基类启动异步读取流程
             /// @warning    须在socket连接建立后调用
             /// @note       基类的读取流程幂等（started 标志），但本函数每次调用都会再发一条测试消息
             void startClient(std::string testMsg = "Check connection");
