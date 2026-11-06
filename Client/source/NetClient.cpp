@@ -22,7 +22,17 @@ namespace Net
         ///             业务想换第一条消息的内容，直接调 startClient("...") 即可
         void Client::start()
         {
-            startClient(); // 默认第一条消息是 "Check connection"
+            startClient(startMsg); // 第一条消息用 setStartMessage() 设定的内容，默认 "Check connection"
+        }
+
+        /// @brief      设置「连接成功后自动发送的第一条消息」
+        /// @details    只写成员、不触发发送；必须在 Connect() 之前调用才生效
+        /// @param[in] msg 第一条消息内容（ID 固定为 0）
+        /// @warning    空串会被 startClient 拒绝（协议要求长度 > 0）
+        /// @note        重复调用以最后一次为准
+        void Client::setStartMessage(std::string msg)
+        {
+            startMsg = std::move(msg);
         }
 
         /// @brief      开始函数（自定义第一条消息）

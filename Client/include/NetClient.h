@@ -66,18 +66,24 @@ namespace Net
             void Connect();
 
             /// @brief      开始函数（覆盖基类 Connection::start）
-            /// @details    Connect() 连接成功后调用它，内部转调 startClient() 走默认流程
+            /// @details    Connect() 连接成功后调用它，内部转调 startClient(startMsg)
             /// @warning    须在 socket 连接建立后调用
-            /// @note       第一条消息固定为默认值 "Check connection"；要自定义请用下面带参数的重载
+            /// @note       第一条消息的内容由 setStartMessage() 决定（默认 "Check connection"）
             void start() override;
 
-            /// @brief      开始函数（自定义连接后的第一条消息）
-            /// @details    与无参版本作用相同，只是允许使用方指定第一条消息的内容；
-            ///             内部同样是转调 startClient(testMsg)
-            /// @param[in] testMsg 第一条消息的内容（ID 固定为 0，供对端识别或打日志）
-            /// @warning    须在 socket 连接建立后调用
-            /// @note        新增的是重载而不是改签名，所以多态行为不变：
-            ///             通过基类 Connection 引用/指针调用的仍然是那个无参版本
+            /// @brief      设置「连接成功后自动发送的第一条消息」
+            /// @details    想让对端一眼认出是谁，就在这里放一段自己的标识；必须在 Connect() 之前调用
+            /// @param[in] msg 第一条消息内容（ID 固定为 0，协议不校验文本）
+            /// @warning    空串会被 startClient 拒绝（协议要求长度 > 0），此时这条消息不会发出
+            /// @note        只写成员、不触发发送；重复调用以最后一次为准
+            void setStartMessage(std::string msg);
+
+            /// @brief      开始函数（手动指定本次的第一条消息）
+            /// @details    与无参版本作用相同，但改用调用方给的 testMsg；一般用不到，
+            ///             除非你不想先 setStartMessage，而是连接建立后自己控制发送时机
+            /// @param[in] testMsg 第一条消息的内容（ID 固定为 0）
+            /// @warning    须在 socket 连接建立后调用；Connect() 已自动 start() 过一次，再调会多发一条
+            /// @note        新增的是重载而不是改签名，多态行为不变
             void start(std::string testMsg);
 
             /// @brief      开始函数（实际操作）
@@ -131,6 +137,12 @@ namespace Net
             /// @brief 记录对应的IP和port
             /// @details 记录这个 Client 对应的 host 和 port，供 Connect() 解析使用
             HostPort HP;
+
+            /// @brief 连接成功后自动发送的第一条消息
+            /// @details 由 setStartMessage() 设置，默认 "Check connection"；
+            ///          Connect() → start() → startClient(startMsg) 时使用
+            /// @note  只在 start() 里读取，收发过程不会改动它
+            std::string startMsg = "Check connection";
 
             /// @brief 记录业务的关闭回调
             /// @details 解析地址或建立连接失败时通知业务侧（可为空）
