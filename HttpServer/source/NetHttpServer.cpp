@@ -75,6 +75,61 @@ namespace Net::Server::HttpServer
             return out;
         }
 
+        /// @brief 去掉首尾空白（空格 / 制表符 / CR / LF）
+        std::string TrimCopy(const std::string& s)
+        {
+            const auto first = s.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos)
+            {
+                return {};
+            }
+            const auto last = s.find_last_not_of(" \t\r\n");
+            return s.substr(first, last - first + 1);
+        }
+
+        /// @brief      决定本次请求的客户端 IP
+        /// @details    trustProxy=false 时直接用 socket 对端地址；true 时依次尝试
+        ///             X-Forwarded-For（取最左一段，即最初的客户端）、X-Real-IP，
+        ///             两个头都缺失 / 为空才回退 socket 地址
+        /// @param[in] req Beast 解析得到的 request
+        /// @param[in] socketIP 取自 remote_endpoint 的地址
+        /// @param[in] trustProxy 是否信任代理头
+        /// @return 用于填充 Url::requestIP 的字符串
+        /// @warning    代理头可被客户端伪造：只在服务确实位于可信反向代理之后时才打开 trustProxy
+        template <class Request>
+        std::string ResolveClientIP(const Request& req, const std::string& socketIP, bool trustProxy)
+        {
+            if (!trustProxy)
+            {
+                return socketIP;
+            }
+
+            // X-Forwarded-For 形如 "client, proxy1, proxy2"，最左边才是原始客户端
+            std::string xff = TrimCopy(std::string(req["X-Forwarded-For"]));
+            if (!xff.empty())
+            {
+                const auto comma = xff.find(',');
+                if (comma != std::string::npos)
+                {
+                    xff.resize(comma);
+                }
+                xff = TrimCopy(xff);
+                if (!xff.empty())
+                {
+                    return xff;
+                }
+            }
+
+            // 退化到 Nginx 常用的 X-Real-IP
+            std::string xri = TrimCopy(std::string(req["X-Real-IP"]));
+            if (!xri.empty())
+            {
+                return xri;
+            }
+
+            return socketIP;
+        }
+
     } // namespace
 
     //========== HttpSession ==========
@@ -92,9 +147,11 @@ namespace Net::Server::HttpServer
     /// @note       基类拿到的是空回调：HTTP 会话绝不能走基类「读 12 字节二进制头」的链路
     HttpSession::HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                              std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen,
-                             int maxHttpHeaderLen, int maxHttpSendBufLen)
+                             int maxHttpHeaderLen, int maxHttpSendBufLen, bool trustProxy)
         : Net::Server::Session(io, std::move(sock), nullptr, timeout, maxSendBufLen)
     {
+        // 是否信任代理头判定客户端 IP：由 HttpServer::setTrustProxy() 在创建会话时快照一次
+        this->trustProxy = trustProxy;
         // 请求头 / 请求体上限：非正数回退为默认 10MB
         if (maxHttpSendBufLen <= 0)
         {
@@ -191,6 +248,16 @@ namespace Net::Server::HttpServer
                 const auto methodView = req.method_string();
                 const auto targetView = req.target();
                 self->url.headers = BuildRawHeaders(req); // 原始请求头：起始行 + 字段 + 结尾空行，业务层可直接读
+
+                // 客户端 IP：默认取 socket 对端地址；开了 trustProxy 时优先用
+                // X-Forwarded-For（最左一段）/ X-Real-IP，两者都没有才回退对端地址
+                {
+                    boost::system::error_code ipEc;
+                    const auto peer = self->socket.remote_endpoint(ipEc);
+                    // 注意：Boost 1.92 起 address::to_string() 只有无参重载（带 error_code 的被移除了）
+                    const std::string socketIP = ipEc ? std::string("0.0.0.0") : peer.address().to_string();
+                    self->url.requestIP = ResolveClientIP(req, socketIP, self->trustProxy);
+                }
                 self->url.method.assign(methodView.data(), methodView.size());
                 self->url.target.assign(targetView.data(), targetView.size());
                 self->url.version = req.version();
@@ -784,7 +851,8 @@ namespace Net::Server::HttpServer
                 // 构造函数按值接收 socket，需 std::move(*sock)；
                 // 第 5 个参数是基类的发送队列上限（HTTP 不使用，用具名常量标明语义）
                 auto session = std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut,
-                                                            kBaseSendQueueUnused, maxHttpHeaderLen, maxHttpSendBufLen);
+                                                            kBaseSendQueueUnused, maxHttpHeaderLen, maxHttpSendBufLen,
+                                                            trustProxy); // 把「是否信任代理头」快照给会话
                 // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
                 session->offNoDelay();
                 // 将session放入会话表，由巡检线程统一回收

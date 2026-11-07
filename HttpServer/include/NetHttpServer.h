@@ -62,6 +62,14 @@ namespace Net::Server::HttpServer
 
         /// @brief 本次请求的请求号（与 httpAsyncReplay 的 seq 参数配对，防止迟到回包串请求）
         unsigned long long seq = 0;
+
+        /// @brief 发起本次请求的客户端 IP（点分十进制，例如 "192.168.1.20"）
+        /// @details 默认取 socket 的对端地址（remote_endpoint）；若 HttpServer 打开了
+        ///          setTrustProxy(true)，则优先用 X-Forwarded-For（取最左一段）或 X-Real-IP，
+        ///          两者都没有时才回退到对端地址
+        /// @note 默认 "0.0.0.0"；取不到（连接已断）时保留默认值。
+        ///       每条请求开始时随 Url 一起重置，随后由 readHead 重新填入
+        std::string requestIP = "0.0.0.0";
     };
 
     /// @brief HTTP 会话前向声明
@@ -99,10 +107,11 @@ namespace Net::Server::HttpServer
         /// @param[in] maxHttpSendBufLen 请求头 / 请求体的长度上限（非正数回退为 10MB）
         /// @warning    构造完成后必须马上交给 shared_ptr 持有，否则 start() 里的
         ///             shared_from_this() 会抛 std::bad_weak_ptr
+        /// @param[in] trustProxy 是否信任代理头来判定客户端 IP（见 HttpServer::setTrustProxy）
         /// @note
         HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                     std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen, int maxHttpHeaderLen,
-                    int maxHttpSendBufLen);
+                    int maxHttpSendBufLen, bool trustProxy = false);
 
         /// @brief      开始（或继续）读取下一条 HTTP 请求
         /// @details    重建解析器 → 清空请求上下文 → 异步读请求头；
@@ -195,6 +204,10 @@ namespace Net::Server::HttpServer
         /// @brief 当前请求的上下文（业务层只读）
         Url url = Url{};
 
+        /// @brief 是否信任 X-Forwarded-For / X-Real-IP（由 HttpServer 创建会话时传入）
+        /// @details 关闭时 requestIP 一律取 TCP 对端地址；打开后优先取代理头
+        bool trustProxy = false;
+
         /// @brief 业务回调
         std::shared_ptr<HttpHandleFunction> HHF = nullptr;
 
@@ -261,6 +274,16 @@ namespace Net::Server::HttpServer
         /// @note       幂等，可重复调用
         void stop() override;
 
+        /// @brief      设置「是否用代理头判定客户端 IP」
+        /// @details    默认 false：Url::requestIP 一律取 TCP 对端地址（直连场景，最可靠）。
+        ///              设为 true 后，请求带 X-Forwarded-For 时取它最左边一段（原始客户端），
+        ///              否则看 X-Real-IP，两个头都没有才回退到对端地址。
+        /// @param[in] trust true = 信任 X-Forwarded-For / X-Real-IP
+        /// @warning     **只有服务确实部署在可信反向代理之后才打开**：这两个头客户端可以随便伪造，
+        ///              直接暴露公网时打开等于让任何人自报 IP（可用于刷限流、伪造审计日志）
+        /// @note        在 start() 之前设置；对已 accept 的会话不生效（每个会话创建时快照一次）
+        void setTrustProxy(bool trust) { trustProxy = trust; }
+
     private:
         /// @brief 关闭所有的Http
         void closeHttpAll();
@@ -274,6 +297,10 @@ namespace Net::Server::HttpServer
 
         /// @brief HTTP 监听端点（构造时保存，重启时要用）
         boost::asio::ip::tcp::endpoint epHttp;
+
+        /// @brief 是否信任代理头（X-Forwarded-For / X-Real-IP）来判定客户端 IP
+        /// @details 由 setTrustProxy() 设置，默认关闭；创建新会话时传给 HttpSession
+        bool trustProxy = false;
 
         /// @brief      发起一次异步 accept
         /// @details    成功则创建会话、放进会话表并启动读循环；无论成败都会续接下一次 accept
