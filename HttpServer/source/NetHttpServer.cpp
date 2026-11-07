@@ -401,6 +401,35 @@ namespace Net::Server::HttpServer
     /// @warning    每条请求只回一次包：重复调用会把两条响应拼到同一条流上，报文会直接乱掉
     bool HttpSession::httpReplay(const std::string& body, boost::beast::http::status st)
     {
+        return httpReplayImpl(body, st, {});
+    }
+
+    /// @brief      发送 HTTP 响应（可带自定义响应头）
+    /// @details    与两参版本等价，只是把 headers 一并写进报文
+    /// @param[in] body 响应体（非空）
+    /// @param[in] st 状态码
+    /// @param[in] headers 额外响应头（同名覆盖库内默认头）
+    /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
+    /// @warning    必须在 IO 线程内调用；业务线程请用带 headers 的 httpAsyncReplay
+    /// @note
+    bool HttpSession::httpReplay(const std::string& body, boost::beast::http::status st,
+                                 const ResponseHeaders& headers)
+    {
+        return httpReplayImpl(body, st, headers);
+    }
+
+    /// @brief      发送 HTTP 响应（可带自定义响应头）
+    /// @details    组报文 → 异步写 → 写完按 keep-alive 决定复用连接还是关闭；
+    ///              headers 在库内默认头之后逐条写入，同名项覆盖默认值
+    /// @param[in] body 响应体（非空）
+    /// @param[in] st 状态码
+    /// @param[in] headers 额外响应头（Set-Cookie / X-Request-Id / X-Cache ...）
+    /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
+    /// @warning    每条请求只回一次包：重复调用会把两条响应拼到同一条流上，报文会直接乱掉
+    /// @note
+    bool HttpSession::httpReplayImpl(const std::string& body, boost::beast::http::status st,
+                                     const ResponseHeaders& headers)
+    {
         if (isClosed())
         {
             Utils::Out::outErr("会话关闭中，此次发送不发送");
@@ -430,6 +459,16 @@ namespace Net::Server::HttpServer
         res->set("Access-Control-Allow-Origin", "*");
         res->set("Access-Control-Allow-Headers", "Content-Type, Authorization");
         res->set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+
+        // 业务自定义响应头：逐条写入，同名时覆盖上面这些默认值（Beast 的 set() 语义）
+        // 典型用途：Set-Cookie（登录）、X-Request-Id（链路追踪）、X-Cache（缓存命中）
+        for (const auto& header : headers)
+        {
+            if (!header.first.empty())
+            {
+                res->set(header.first, header.second);
+            }
+        }
 
         // 消息体复制到发送里
         res->body() = body;
@@ -488,6 +527,20 @@ namespace Net::Server::HttpServer
     /// @note
     void HttpSession::httpAsyncReplay(unsigned long long seq, const std::string& body, boost::beast::http::status st)
     {
+        httpAsyncReplay(seq, body, st, {});
+    }
+
+    /// @brief      线程安全地回复响应（可带自定义响应头）
+    /// @details    任意线程均可调用，内部 post 到 IO 线程执行，避免跨线程碰 socket / parser
+    /// @param[in] seq 请求号（必须用回调里给的 url.seq）
+    /// @param[in] body 响应体（空串会被忽略）
+    /// @param[in] st 状态码
+    /// @param[in] headers 额外响应头（Set-Cookie / X-Request-Id / X-Cache ...）
+    /// @warning    会话已关闭、或当前没有请求在等回包时，本次调用被丢弃
+    /// @note
+    void HttpSession::httpAsyncReplay(unsigned long long seq, const std::string& body, boost::beast::http::status st,
+                                      const ResponseHeaders& headers)
+    {
         // 空响应体没有意义，直接丢弃（约定了空串表示「异步」，不能拿来回空包）
         if (body.empty())
         {
@@ -498,7 +551,7 @@ namespace Net::Server::HttpServer
         auto self = getSession();
 
         boost::asio::post(socket.get_executor(),
-                          [self, seq, body, st]()
+                          [self, seq, body, st, headers]()
                           {
                               // 会话已关闭（超时、对端断开、服务器停止）→ 丢弃
                               if (self->isClosed())
@@ -520,7 +573,7 @@ namespace Net::Server::HttpServer
                                   return;
                               }
 
-                              self->httpReplay(body, st);
+                              self->httpReplayImpl(body, st, headers);
                           });
     }
 

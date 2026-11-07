@@ -15,6 +15,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <boost/asio.hpp>
@@ -30,6 +31,12 @@
 /// @note
 namespace Net::Server::HttpServer
 {
+
+    /// @brief 响应头列表（名值对，按顺序追加到响应报文）
+    /// @details 供业务设置 Set-Cookie / X-Request-Id / X-Cache 这类头；
+    ///          与库内已有的头同名时以这里为准（Beast 的 set() 会覆盖同名项）
+    /// @note 头名按规范写法书写，值原样输出，不做任何转义
+    using ResponseHeaders = std::vector<std::pair<std::string, std::string>>;
 
     /// @brief 存储一次请求的上下文
     /// @details 名字沿用历史（最早只放 url）；路由删掉之后，这里只保留协议层信息：
@@ -131,6 +138,17 @@ namespace Net::Server::HttpServer
         ///             返回 false 时调用方可以据此关掉卡住的连接（空闲巡检就是这么做的）
         bool httpReplay(const std::string& body, boost::beast::http::status st = boost::beast::http::status::ok);
 
+        /// @brief      发送响应（可带自定义响应头）
+        /// @details    与上面两参版本完全相同，只是在写报文时额外追加 headers；
+        ///              典型用途：Set-Cookie、X-Request-Id、X-Cache
+        /// @param[in] body 响应体
+        /// @param[in] st 状态码
+        /// @param[in] headers 额外响应头（同名的库内默认头会被覆盖）
+        /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
+        /// @warning    必须在 IO 线程内调用；业务线程请用带 headers 的 httpAsyncReplay
+        /// @note        每条请求只回一次包，重复调用会被丢弃
+        bool httpReplay(const std::string& body, boost::beast::http::status st, const ResponseHeaders& headers);
+
         /// @brief      线程安全地发送响应
         /// @details    任意线程均可调用，内部 post 到 IO 线程执行；
         ///             用于业务回调返回后，业务完成时主动回包
@@ -139,6 +157,18 @@ namespace Net::Server::HttpServer
         /// @note
         void httpAsyncReplay(unsigned long long seq, const std::string& body,
                              boost::beast::http::status st = boost::beast::http::status::ok);
+
+        /// @brief      线程安全地发送响应（可带自定义响应头）
+        /// @details    任意线程均可调用，内部 post 到 IO 线程执行；用法同上面的三参版本，
+        ///              只是额外把 headers 写进报文
+        /// @param[in] seq 请求号（必须用回调里给的 url.seq）
+        /// @param[in] body 响应体
+        /// @param[in] st 状态码
+        /// @param[in] headers 额外响应头（Set-Cookie / X-Request-Id / X-Cache ...）
+        /// @warning    会话已关闭、或当前没有请求在等回包时，本次调用被丢弃
+        /// @note
+        void httpAsyncReplay(unsigned long long seq, const std::string& body, boost::beast::http::status st,
+                             const ResponseHeaders& headers);
 
         /// @brief 兼容接口：按"当前请求"回包（等价于 httpAsyncReplay(reqSeq, body, 200)）
         /// @param[in] body 响应体（空串会被忽略）
@@ -171,6 +201,14 @@ namespace Net::Server::HttpServer
         /// @warning    回调在 IO 线程内执行，业务里禁止阻塞
         /// @note       仅 IO 线程内调用；回调返回后不再做任何事（回包与关闭都由回调触发）
         void handleToWork();
+
+        /// @brief 实际组报文并异步写出的实现（带自定义响应头）
+        /// @param[in] body 响应体
+        /// @param[in] st 状态码
+        /// @param[in] headers 额外响应头
+        /// @return 报文已交给 socket 返回 true；重复回包被丢弃返回 false
+        /// @note   仅 IO 线程内调用
+        bool httpReplayImpl(const std::string& body, boost::beast::http::status st, const ResponseHeaders& headers);
 
         /// @brief      读取请求体
         /// @details    两段式读取的第二段：在同一个 parser 上续读，读完（含 chunked 解码）后进业务
