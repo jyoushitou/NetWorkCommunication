@@ -32,6 +32,7 @@
 - 客户端支持独立的关闭回调 `Net::Client::CloseFunction`（`std::function<void(const boost::system::error_code)>`），解析 / 连接失败或出错时通知业务侧，内部 `closeNotifiedByUser` 保证最多回调一次
 - 客户端支持多连接并行：每连接独立 `io_context` + 独立 `io_thread`；同一个 `io_context` 只允许由一个线程 `run()`，须先 `Connect()` 再启动 IO 线程（示例中共享的 `clients` 容器由互斥量保护）
 - **HTTP 服务端 `Net::Server::HttpServer`**（基于 Boost.Beast，另需 `boost-beast` / `boost-json`）：`HttpSession` 继承 TCP 的 `Session`，两段式读请求（头 → body，按 `parser->is_done()` 判断，chunked 也正确）、keep-alive 复用、一条请求只回一个响应、请求号配对防止迟到回包串到下一条请求；`httpReplay(body, status)` 同步回包、`httpAsyncReplay(seq, body, status)` 线程安全异步回包，空闲超时回 408、忙超时回 503
+- **HTTP 客户端 `Net::Client::Http`**（出站，另需 `openssl`）：`HttpClient::Send` 同步发起请求，支持 `http` / `https`（TLS 由 OpenSSL 提供）、自定义头与 body、超时、`verifyPeer` 与 `caFile`；用于回调 Cloudflare siteverify、调内部微服务这类出站场景
 - `Common` / `Utils` / `Net` 分层命名，构建期别名与安装后导出名一致，支持 `find_package(CommonNet)` 复用
 - 强制 x64 构建兜底校验（避免与 vcpkg x64 依赖混编报 `LNK1112`）
 
@@ -41,6 +42,9 @@
 - C++17
 - Boost（asio 纯头文件库 + `system` 组件）
   - 安装：`vcpkg install boost-asio boost-system`
+- **OpenSSL**（仅出站 HTTP 客户端 `CommonNetHttpClient` 需要，用于 https 的 TLS）
+  - 安装：`vcpkg install openssl`
+  - 不做出站请求时可以用 `-DCOMMONNET_BUILD_HTTP_CLIENT=OFF` 整个关掉，省去该依赖
 - **Utils**：本工程的前置依赖库（日志 `Utils::Out` / 时间 `Utils::Time` / 优雅退出 `Utils::Exit`），由本机 vcpkg 的 **`utils` 端口**提供
   - 安装：`vcpkg install utils`
   - CMake 侧通过 `find_package(Utils CONFIG REQUIRED)` 引入导入目标 `Utils::Utils`
@@ -74,6 +78,11 @@ NetWorkCommunication/
 │   │   └── NetHttpServer.h      # HttpSession / HttpServer 声明
 │   └── source/
 │       └── NetHttpServer.cpp    # 请求解析、keep-alive、同步/异步回包、HTTP 巡检线程
+├── HttpClient/                  # 出站 HTTP 客户端库源码（提交，基于 Boost.Beast + OpenSSL）
+│   ├── include/
+│   │   └── NetHttpClient.h      # HttpClient / Request / Response 声明
+│   └── source/
+│       └── NetHttpClient.cpp    # URL 拆解、DNS、连接、TLS 握手、收发
 ├── examples/                    # 示例程序入口（提交）
 │   ├── CMakeLists.txt           # Server / Client / HttpServer 三个示例可执行文件定义
 │   ├── Server/
@@ -122,7 +131,7 @@ NetWorkCommunication/
 
 ```bash
 # Utils 是本工程的前置依赖库，Boost 提供 asio 头文件与 system 组件
-vcpkg install utils boost-asio boost-system
+vcpkg install utils boost-asio boost-system boost-beast boost-json openssl
 ```
 
 ### 设置 vcpkg 工具链（CMakeLists 自动检测）
@@ -158,10 +167,11 @@ cmake --build build --config Debug
 | `CommonNetServer`   | 静态库     | 服务端（`Server/source/NetServer.cpp`），链接 `CommonNetCore`                               |
 | `CommonNetClient`   | 静态库     | 客户端（`Client/source/NetClient.cpp`），链接 `CommonNetCore`                               |
 | `CommonNetHttpServer` | 静态库   | HTTP 服务端（`HttpServer/source/NetHttpServer.cpp`），链接 `CommonNetServer` + `Boost::beast` / `Boost::json`（`-DCOMMONNET_BUILD_HTTP_SERVER=OFF` 可关闭） |
+| `CommonNetHttpClient` | 静态库   | 出站 HTTP 客户端（`HttpClient/source/NetHttpClient.cpp`），链接 `CommonNetCore` + `OpenSSL::SSL` / `OpenSSL::Crypto`（`-DCOMMONNET_BUILD_HTTP_CLIENT=OFF` 可关闭并省掉 OpenSSL） |
 | `Server` / `Client` / `HttpServer` | 可执行文件 | 示例程序，位于构建目录 `examples/` 下（`-DCOMMONNET_BUILD_EXAMPLES=OFF` 可关闭） |
 
 > **命名层级**：`Common`(大功能) → `Utils` / `Net`(小功能) → `Core` / `Server` / `Client`(具体库)。
-> **CMake 别名**（构建期别名与安装后导出名一致）：`Common::Utils`、`Common::Net::Core`、`Common::Net::Server`、`Common::Net::Client`。
+> **CMake 别名**（构建期别名与安装后导出名一致）：`Common::Utils`、`Common::Net::Core`、`Common::Net::Server`、`Common::Net::Client`、`Common::Net::HttpServer`、`Common::Net::HttpClient`。
 > **依赖链**：`CommonUtils` ← `CommonNetCore` ←（`CommonNetServer` / `CommonNetClient`）。
 > `CommonUtils` 本身不含实现，只是把 vcpkg 的 `Utils::Utils` 转发出去；
 > 因此 `Utils.h` / `Message.h` / `UtilsExport.h`、`Utils_STATIC_DEFINE`、`Threads::Threads`
@@ -198,7 +208,7 @@ vcpkg install commonnet:x64-windows --no-binarycaching `
 > 把两个目录写进 `"overlay-ports": [...]`，之后命令只留 `vcpkg install commonnet:x64-windows`。
 
 > **前提：Boost 已由 vcpkg 装好**（本机为 1.90.0，无需再动）：
-> `vcpkg install boost-asio:x64-windows boost-system:x64-windows boost-beast:x64-windows boost-json:x64-windows`
+> `vcpkg install boost-asio:x64-windows boost-system:x64-windows boost-beast:x64-windows boost-json:x64-windows openssl:x64-windows`
 >
 > `ports/commonnet/vcpkg.json` **故意没有声明** boost 依赖：一旦声明，vcpkg 会按端口树的版本
 > （当前 1.92.0）把整棵 Boost 重装一遍，而本机访问 GitHub 超时，`boost-cmake` 下载三次失败后直接
@@ -486,6 +496,46 @@ ioThread.join();
 - **上限**：请求头默认 8KB（`maxHttpHeaderLen`）、请求体默认 10MB（`maxHttpSendBufLen`）、最大并发连接数默认 1024（`maxConnections`）。
 - **自动化行为**：空闲超时回 408、业务回包超时（`httpSessionTimeOut`，默认 60s）回 503 并断开、对端正常断开静默收尾。
 - `Url::body` 已由 Beast 解码（chunked 也是明文），业务无需自己处理传输编码。
+
+### HTTP 客户端（出站）
+
+`Net::Client::Http::HttpClient` 用于**主动发起**请求，跟上面的 `HttpServer` 正好相反：那一层是「别人来连我」，这一层是「我去连别人」。典型场景是回调 Cloudflare siteverify、调内部微服务。
+
+```cpp
+#include "NetHttpClient.h"
+
+boost::asio::io_context io;               // 只借来解析/连接，不需要 run
+Net::Client::Http::HttpClient client(io);
+
+Net::Client::Http::Request req;
+req.method = "POST";
+req.url = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+req.headers.emplace_back("Content-Type", "application/x-www-form-urlencoded");
+req.body = "secret=" + secret + "&response=" + token;
+req.timeoutMs = 8000;
+req.caFile = R"(D:\certs\cacert.pem)";    // Windows 上建议显式给，见下
+
+boost::system::error_code ec;
+const auto res = client.Send(req, ec);
+if (ec)
+{
+    Utils::Out::outErr("出站请求失败：" + ec.message() + " / " + res.error);
+}
+else
+{
+    Utils::Out::outMsg("status=" + std::to_string(res.status) + " body=" + res.body);
+}
+```
+
+链接：`target_link_libraries(你的目标 PRIVATE Common::Net::HttpClient)`。
+
+要点：
+
+- **同步阻塞**：`Send` 期间线程会一直等结果。**禁止在业务回调（IO 线程）里直接调用**，请丢到工作线程，算完再用 `httpAsyncReplay` 回包。
+- **Windows 上务必给 `caFile`**：OpenSSL 在 Windows 的默认证书路径通常是空的，不指定就会 `certificate verify failed`。用现成的 PEM 即可（例如 Python `certifi` 包里的 `cacert.pem`）；调试自签证书时可以临时把 `verifyPeer` 设成 `false`。
+- 只支持 `http://` 与 `https://`，**不自动跟随 3xx**；URL 里的 `user:pass@` 会被忽略。
+- `res.error` 是给人看的原因（CA 加载 / 握手 / 超时），`ec` 是系统错误码；排障时两个都要看。
+- 每次 `Send` 自建连接、用完即关，**不做连接复用**；调用量大时请在上层做池化或改成长连接实现。
 
 ## 自定义业务模块指引
 
