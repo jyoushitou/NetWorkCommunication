@@ -199,6 +199,7 @@ namespace Net::Server::HttpServer
         busy.store(false, std::memory_order_relaxed);
         busySince.store(0);
         replied.store(false, std::memory_order_relaxed);
+        drainAfterReply = false; // 上一个请求若被 413/431 提前拒绝，这里清掉，别影响下一条
         closeAfterReply.store(false, std::memory_order_relaxed);
 
         // 更新时间
@@ -229,6 +230,18 @@ namespace Net::Server::HttpServer
                 // 主动关闭 socket 引发的取消：正常退出流程的一部分，静默返回
                 if (ec == boost::asio::error::operation_aborted)
                 {
+                    return;
+                }
+
+                // 请求体上限：Content-Length 在「解析请求头」阶段就被 Beast 校验，
+                // 超限会在这里拿到 body_limit，必须回 413 而不是直接断连
+                if (ec == boost::beast::http::error::body_limit)
+                {
+                    Utils::Out::outErr("HTTP 请求体超过上限（Content-Length 超限），返回 413");
+                    // 对端很可能还在灌数据：先排空再关，避免 RST 把 413 冲掉
+                    self->drainAfterReply = true;
+                    self->httpReplay(ErrorBody("payload too large"),
+                                     boost::beast::http::status::payload_too_large);
                     return;
                 }
 
@@ -319,6 +332,8 @@ namespace Net::Server::HttpServer
                                            if (ec == boost::beast::http::error::body_limit)
                                            {
                                                Utils::Out::outErr("HTTP 请求体超过上限，返回 413");
+                                               // 剩余 body 还在路上：先排空再关，避免 RST 把 413 冲掉
+                                               self->drainAfterReply = true;
                                                self->httpReplay(ErrorBody("payload too large"),
                                                                 boost::beast::http::status::payload_too_large);
                                                return;
@@ -502,6 +517,13 @@ namespace Net::Server::HttpServer
                                             // 报文里说了不复用（或客户端要求关闭）→ 关连接
                                             if (!res->keep_alive())
                                             {
+                                                // 提前拒绝（413 / 431）：响应已写出，但对端可能还在灌数据，
+                                                // 直接 close 会因未读数据回 RST，客户端就看不到这条响应了
+                                                if (self->drainAfterReply)
+                                                {
+                                                    self->drainThenClose();
+                                                    return;
+                                                }
                                                 self->closeSession();
                                                 return;
                                             }
@@ -618,6 +640,48 @@ namespace Net::Server::HttpServer
     {
         auto self = getSession();
         boost::asio::post(socket.get_executor(), [self]() { self->closeWithError(); });
+    }
+
+    /// @brief      半关闭发送方向后把残余请求数据读掉，再关连接
+    /// @details    用于「提前拒绝」场景（413 请求体超限 / 431 请求头超限）：
+    ///              响应已经写出，但对端可能还在灌数据。直接 close 会因为接收缓冲里
+    ///              仍有未读字节而让内核回 RST，客户端常常只看到连接被重置。
+    ///              做法：shutdown(send) 先把 FIN 排在响应字节之后，再把剩余数据读干净
+    ///              （有上限），最后正常关闭，客户端就能稳定收到状态码。
+    /// @warning    仅 IO 线程内调用
+    /// @note       上限 16MB，防止恶意客户端无限灌数据拖死连接
+    void HttpSession::drainThenClose()
+    {
+        boost::system::error_code ec;
+        socket.shutdown(boost::asio::ip::tcp::socket::shutdown_send, ec);
+
+        drainRemaining = 16 * 1024 * 1024;
+        drainStep();
+    }
+
+    /// @brief 排空的一步：读一块丢弃，继续；EOF / 出错 / 到上限就真正关闭
+    /// @note  仅 IO 线程内调用
+    void HttpSession::drainStep()
+    {
+        if (isClosed() || drainRemaining == 0)
+        {
+            closeSession();
+            return;
+        }
+
+        auto self = getSession();
+        socket.async_read_some(boost::asio::buffer(drainBuf),
+                               [self](boost::system::error_code ec, std::size_t n)
+                               {
+                                   if (ec)
+                                   {
+                                       // EOF（对端发完并关闭）或读错误：可以直接关了
+                                       self->closeSession();
+                                       return;
+                                   }
+                                   self->drainRemaining = (n >= self->drainRemaining) ? 0 : self->drainRemaining - n;
+                                   self->drainStep();
+                               });
     }
 
     //========== HttpServer ==========

@@ -8,6 +8,7 @@
 /// @copyright   Copyright (c) 2026
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <functional>
@@ -209,6 +210,26 @@ namespace Net::Server::HttpServer
         /// @return 报文已交给 socket 返回 true；重复回包被丢弃返回 false
         /// @note   仅 IO 线程内调用
         bool httpReplayImpl(const std::string& body, boost::beast::http::status st, const ResponseHeaders& headers);
+
+        /// @brief 响应写完后「先排空残余请求数据、再关连接」的开关
+        /// @details 提前拒绝（413 请求体超限 / 431 请求头超限）时，对端可能还在灌数据；
+        ///          此时直接 close 会因为接收缓冲里有未读字节而让内核回 RST，
+        ///          客户端常常只看到连接被重置，看不到我们刚发出的状态码。
+        bool drainAfterReply = false;
+
+        /// @brief 排空阶段还能再丢弃多少字节（防止对端无限灌数据把内存/时间拖死）
+        std::size_t drainRemaining = 0;
+
+        /// @brief 排空阶段用的读缓冲
+        std::array<char, 8192> drainBuf{};
+
+        /// @brief 半关闭发送方向，然后把对端残余数据读掉，最后关连接
+        /// @note 仅 IO 线程内调用
+        void drainThenClose();
+
+        /// @brief 排空的一步：读一块丢弃，继续；读到 EOF / 出错 / 到上限就真正关闭
+        /// @note 仅 IO 线程内调用
+        void drainStep();
 
         /// @brief      读取请求体
         /// @details    两段式读取的第二段：在同一个 parser 上续读，读完（含 chunked 解码）后进业务
