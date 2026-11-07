@@ -245,6 +245,17 @@ namespace Net::Server::HttpServer
                     return;
                 }
 
+                // 请求头上限：回 431（Request Header Fields Too Large）再关，
+                // 不要再让客户端对着「连接被重置」猜原因
+                if (ec == boost::beast::http::error::header_limit)
+                {
+                    Utils::Out::outErr("HTTP 请求头超过上限，返回 431");
+                    self->drainAfterReply = true; // 对端可能还有头没发完：先排空再关
+                    self->httpReplay(ErrorBody("request header fields too large"),
+                                     boost::beast::http::status::request_header_fields_too_large);
+                    return;
+                }
+
                 // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
                 if (ec)
                 {
