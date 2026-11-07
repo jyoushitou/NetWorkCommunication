@@ -23,8 +23,8 @@ namespace Net::Server::HttpServer
         /// @brief 构造一个最小的 JSON 错误体
         /// @param[in] msg 错误描述
         /// @return 形如 {"code":1,"msg":"..."} 的字符串
-        /// @warning 响应体不能为空串：空串是「异步回包」的约定，不能拿来回空包
-        /// @note
+        /// @note  错误体统一用 JSON，方便前端直接解析；空 body 现在是合法响应，
+        ///        但错误场景仍建议给一段可读的 JSON，别让调用方对着空串猜
         std::string ErrorBody(const char* msg)
         {
             return std::string("{\"code\":1,\"msg\":\"") + msg + "\"}";
@@ -395,7 +395,7 @@ namespace Net::Server::HttpServer
 
     /// @brief      发送 HTTP 响应报文
     /// @details    组报文 → 异步写 → 写完按 keep-alive 决定复用连接还是关闭
-    /// @param[in] body 响应体（非空）
+    /// @param[in] body 响应体（可为空：空串即 Content-Length: 0）
     /// @param[in] st 状态码
     /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
     /// @warning    每条请求只回一次包：重复调用会把两条响应拼到同一条流上，报文会直接乱掉
@@ -406,7 +406,7 @@ namespace Net::Server::HttpServer
 
     /// @brief      发送 HTTP 响应（可带自定义响应头）
     /// @details    与两参版本等价，只是把 headers 一并写进报文
-    /// @param[in] body 响应体（非空）
+    /// @param[in] body 响应体（可为空：空串即 Content-Length: 0）
     /// @param[in] st 状态码
     /// @param[in] headers 额外响应头（同名覆盖库内默认头）
     /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
@@ -421,7 +421,7 @@ namespace Net::Server::HttpServer
     /// @brief      发送 HTTP 响应（可带自定义响应头）
     /// @details    组报文 → 异步写 → 写完按 keep-alive 决定复用连接还是关闭；
     ///              headers 在库内默认头之后逐条写入，同名项覆盖默认值
-    /// @param[in] body 响应体（非空）
+    /// @param[in] body 响应体（可为空：空串即 Content-Length: 0）
     /// @param[in] st 状态码
     /// @param[in] headers 额外响应头（Set-Cookie / X-Request-Id / X-Cache ...）
     /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
@@ -541,13 +541,8 @@ namespace Net::Server::HttpServer
     void HttpSession::httpAsyncReplay(unsigned long long seq, const std::string& body, boost::beast::http::status st,
                                       const ResponseHeaders& headers)
     {
-        // 空响应体没有意义，直接丢弃（约定了空串表示「异步」，不能拿来回空包）
-        if (body.empty())
-        {
-            Utils::Out::outErr("HTTP 异步回包内容为空，已丢弃");
-            return;
-        }
-
+        // 注意：空 body 是合法响应（Content-Length: 0），不再被丢弃。
+        // 「暂不回包」请用「回调里什么都不做」表达，而不是传空串。
         auto self = getSession();
 
         boost::asio::post(socket.get_executor(),

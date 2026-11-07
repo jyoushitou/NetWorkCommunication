@@ -152,7 +152,7 @@ namespace Net::Server::HttpServer
         /// @brief      线程安全地发送响应
         /// @details    任意线程均可调用，内部 post 到 IO 线程执行；
         ///             用于业务回调返回后，业务完成时主动回包
-        /// @param[in] body 响应体（空串会被忽略）
+        /// @param[in] body 响应体（空串会原样发送，得到 Content-Length: 0 的响应）
         /// @warning    会话已关闭、或当前没有请求在等回包时，本次调用被丢弃
         /// @note
         void httpAsyncReplay(unsigned long long seq, const std::string& body,
@@ -171,7 +171,7 @@ namespace Net::Server::HttpServer
                              const ResponseHeaders& headers);
 
         /// @brief 兼容接口：按"当前请求"回包（等价于 httpAsyncReplay(reqSeq, body, 200)）
-        /// @param[in] body 响应体（空串会被忽略）
+        /// @param[in] body 响应体（空串会原样发送）
         /// @warning 迟到回包有串请求风险，新代码请用带 seq 的版本
         /// @note
         void httpAsyncReplay(const std::string& body);
