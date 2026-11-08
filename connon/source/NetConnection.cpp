@@ -448,8 +448,6 @@ namespace Net
                                         return;
                                     }
 
-                                    Utils::Out::outMsg("收到数据！解析数据并检查是否正确ing");
-
                                     // 读取的消息长度（4字节）
                                     uint32_t msg_len = 0;
                                     // 读取的消息ID（8字节）
@@ -557,7 +555,7 @@ namespace Net
                                     // 消息转换为string类型
                                     std::string msg(recvNode->getBuf(), recvNode->getCurLen());
 
-                                    Utils::Out::outMsg("接收完成");
+                                    Utils::Out::outMsg("消息接收完成");
 
                                     // 更新函数
                                     updateTime();

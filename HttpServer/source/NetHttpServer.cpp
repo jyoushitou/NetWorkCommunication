@@ -23,8 +23,8 @@ namespace Net::Server::HttpServer
         /// @brief 构造一个最小的 JSON 错误体
         /// @param[in] msg 错误描述
         /// @return 形如 {"code":1,"msg":"..."} 的字符串
-        /// @warning 响应体不能为空串：空串是「异步回包」的约定，不能拿来回空包
-        /// @note
+        /// @note  错误体统一用 JSON，方便前端直接解析；空 body 现在是合法响应，
+        ///        但错误场景仍建议给一段可读的 JSON，别让调用方对着空串猜
         std::string ErrorBody(const char* msg)
         {
             return std::string("{\"code\":1,\"msg\":\"") + msg + "\"}";
@@ -75,6 +75,61 @@ namespace Net::Server::HttpServer
             return out;
         }
 
+        /// @brief 去掉首尾空白（空格 / 制表符 / CR / LF）
+        std::string TrimCopy(const std::string& s)
+        {
+            const auto first = s.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos)
+            {
+                return {};
+            }
+            const auto last = s.find_last_not_of(" \t\r\n");
+            return s.substr(first, last - first + 1);
+        }
+
+        /// @brief      决定本次请求的客户端 IP
+        /// @details    trustProxy=false 时直接用 socket 对端地址；true 时依次尝试
+        ///             X-Forwarded-For（取最左一段，即最初的客户端）、X-Real-IP，
+        ///             两个头都缺失 / 为空才回退 socket 地址
+        /// @param[in] req Beast 解析得到的 request
+        /// @param[in] socketIP 取自 remote_endpoint 的地址
+        /// @param[in] trustProxy 是否信任代理头
+        /// @return 用于填充 Url::requestIP 的字符串
+        /// @warning    代理头可被客户端伪造：只在服务确实位于可信反向代理之后时才打开 trustProxy
+        template <class Request>
+        std::string ResolveClientIP(const Request& req, const std::string& socketIP, bool trustProxy)
+        {
+            if (!trustProxy)
+            {
+                return socketIP;
+            }
+
+            // X-Forwarded-For 形如 "client, proxy1, proxy2"，最左边才是原始客户端
+            std::string xff = TrimCopy(std::string(req["X-Forwarded-For"]));
+            if (!xff.empty())
+            {
+                const auto comma = xff.find(',');
+                if (comma != std::string::npos)
+                {
+                    xff.resize(comma);
+                }
+                xff = TrimCopy(xff);
+                if (!xff.empty())
+                {
+                    return xff;
+                }
+            }
+
+            // 退化到 Nginx 常用的 X-Real-IP
+            std::string xri = TrimCopy(std::string(req["X-Real-IP"]));
+            if (!xri.empty())
+            {
+                return xri;
+            }
+
+            return socketIP;
+        }
+
     } // namespace
 
     //========== HttpSession ==========
@@ -92,9 +147,11 @@ namespace Net::Server::HttpServer
     /// @note       基类拿到的是空回调：HTTP 会话绝不能走基类「读 12 字节二进制头」的链路
     HttpSession::HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                              std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen,
-                             int maxHttpHeaderLen, int maxHttpSendBufLen)
+                             int maxHttpHeaderLen, int maxHttpSendBufLen, bool trustProxy)
         : Net::Server::Session(io, std::move(sock), nullptr, timeout, maxSendBufLen)
     {
+        // 是否信任代理头判定客户端 IP：由 HttpServer::setTrustProxy() 在创建会话时快照一次
+        this->trustProxy = trustProxy;
         // 请求头 / 请求体上限：非正数回退为默认 10MB
         if (maxHttpSendBufLen <= 0)
         {
@@ -142,6 +199,7 @@ namespace Net::Server::HttpServer
         busy.store(false, std::memory_order_relaxed);
         busySince.store(0);
         replied.store(false, std::memory_order_relaxed);
+        drainAfterReply = false; // 上一个请求若被 413/431 提前拒绝，这里清掉，别影响下一条
         closeAfterReply.store(false, std::memory_order_relaxed);
 
         // 更新时间
@@ -175,6 +233,29 @@ namespace Net::Server::HttpServer
                     return;
                 }
 
+                // 请求体上限：Content-Length 在「解析请求头」阶段就被 Beast 校验，
+                // 超限会在这里拿到 body_limit，必须回 413 而不是直接断连
+                if (ec == boost::beast::http::error::body_limit)
+                {
+                    Utils::Out::outErr("HTTP 请求体超过上限（Content-Length 超限），返回 413");
+                    // 对端很可能还在灌数据：先排空再关，避免 RST 把 413 冲掉
+                    self->drainAfterReply = true;
+                    self->httpReplay(ErrorBody("payload too large"),
+                                     boost::beast::http::status::payload_too_large);
+                    return;
+                }
+
+                // 请求头上限：回 431（Request Header Fields Too Large）再关，
+                // 不要再让客户端对着「连接被重置」猜原因
+                if (ec == boost::beast::http::error::header_limit)
+                {
+                    Utils::Out::outErr("HTTP 请求头超过上限，返回 431");
+                    self->drainAfterReply = true; // 对端可能还有头没发完：先排空再关
+                    self->httpReplay(ErrorBody("request header fields too large"),
+                                     boost::beast::http::status::request_header_fields_too_large);
+                    return;
+                }
+
                 // 连接错误 / 报文非法 / 头过大：流已经不可用，只能关连接
                 if (ec)
                 {
@@ -191,6 +272,16 @@ namespace Net::Server::HttpServer
                 const auto methodView = req.method_string();
                 const auto targetView = req.target();
                 self->url.headers = BuildRawHeaders(req); // 原始请求头：起始行 + 字段 + 结尾空行，业务层可直接读
+
+                // 客户端 IP：默认取 socket 对端地址；开了 trustProxy 时优先用
+                // X-Forwarded-For（最左一段）/ X-Real-IP，两者都没有才回退对端地址
+                {
+                    boost::system::error_code ipEc;
+                    const auto peer = self->socket.remote_endpoint(ipEc);
+                    // 注意：Boost 1.92 起 address::to_string() 只有无参重载（带 error_code 的被移除了）
+                    const std::string socketIP = ipEc ? std::string("0.0.0.0") : peer.address().to_string();
+                    self->url.requestIP = ResolveClientIP(req, socketIP, self->trustProxy);
+                }
                 self->url.method.assign(methodView.data(), methodView.size());
                 self->url.target.assign(targetView.data(), targetView.size());
                 self->url.version = req.version();
@@ -252,6 +343,8 @@ namespace Net::Server::HttpServer
                                            if (ec == boost::beast::http::error::body_limit)
                                            {
                                                Utils::Out::outErr("HTTP 请求体超过上限，返回 413");
+                                               // 剩余 body 还在路上：先排空再关，避免 RST 把 413 冲掉
+                                               self->drainAfterReply = true;
                                                self->httpReplay(ErrorBody("payload too large"),
                                                                 boost::beast::http::status::payload_too_large);
                                                return;
@@ -328,11 +421,40 @@ namespace Net::Server::HttpServer
 
     /// @brief      发送 HTTP 响应报文
     /// @details    组报文 → 异步写 → 写完按 keep-alive 决定复用连接还是关闭
-    /// @param[in] body 响应体（非空）
+    /// @param[in] body 响应体（可为空：空串即 Content-Length: 0）
     /// @param[in] st 状态码
     /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
     /// @warning    每条请求只回一次包：重复调用会把两条响应拼到同一条流上，报文会直接乱掉
     bool HttpSession::httpReplay(const std::string& body, boost::beast::http::status st)
+    {
+        return httpReplayImpl(body, st, {});
+    }
+
+    /// @brief      发送 HTTP 响应（可带自定义响应头）
+    /// @details    与两参版本等价，只是把 headers 一并写进报文
+    /// @param[in] body 响应体（可为空：空串即 Content-Length: 0）
+    /// @param[in] st 状态码
+    /// @param[in] headers 额外响应头（同名覆盖库内默认头）
+    /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
+    /// @warning    必须在 IO 线程内调用；业务线程请用带 headers 的 httpAsyncReplay
+    /// @note
+    bool HttpSession::httpReplay(const std::string& body, boost::beast::http::status st,
+                                 const ResponseHeaders& headers)
+    {
+        return httpReplayImpl(body, st, headers);
+    }
+
+    /// @brief      发送 HTTP 响应（可带自定义响应头）
+    /// @details    组报文 → 异步写 → 写完按 keep-alive 决定复用连接还是关闭；
+    ///              headers 在库内默认头之后逐条写入，同名项覆盖默认值
+    /// @param[in] body 响应体（可为空：空串即 Content-Length: 0）
+    /// @param[in] st 状态码
+    /// @param[in] headers 额外响应头（Set-Cookie / X-Request-Id / X-Cache ...）
+    /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
+    /// @warning    每条请求只回一次包：重复调用会把两条响应拼到同一条流上，报文会直接乱掉
+    /// @note
+    bool HttpSession::httpReplayImpl(const std::string& body, boost::beast::http::status st,
+                                     const ResponseHeaders& headers)
     {
         if (isClosed())
         {
@@ -363,6 +485,16 @@ namespace Net::Server::HttpServer
         res->set("Access-Control-Allow-Origin", "*");
         res->set("Access-Control-Allow-Headers", "Content-Type, Authorization");
         res->set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+
+        // 业务自定义响应头：逐条写入，同名时覆盖上面这些默认值（Beast 的 set() 语义）
+        // 典型用途：Set-Cookie（登录）、X-Request-Id（链路追踪）、X-Cache（缓存命中）
+        for (const auto& header : headers)
+        {
+            if (!header.first.empty())
+            {
+                res->set(header.first, header.second);
+            }
+        }
 
         // 消息体复制到发送里
         res->body() = body;
@@ -396,6 +528,13 @@ namespace Net::Server::HttpServer
                                             // 报文里说了不复用（或客户端要求关闭）→ 关连接
                                             if (!res->keep_alive())
                                             {
+                                                // 提前拒绝（413 / 431）：响应已写出，但对端可能还在灌数据，
+                                                // 直接 close 会因未读数据回 RST，客户端就看不到这条响应了
+                                                if (self->drainAfterReply)
+                                                {
+                                                    self->drainThenClose();
+                                                    return;
+                                                }
                                                 self->closeSession();
                                                 return;
                                             }
@@ -421,17 +560,26 @@ namespace Net::Server::HttpServer
     /// @note
     void HttpSession::httpAsyncReplay(unsigned long long seq, const std::string& body, boost::beast::http::status st)
     {
-        // 空响应体没有意义，直接丢弃（约定了空串表示「异步」，不能拿来回空包）
-        if (body.empty())
-        {
-            Utils::Out::outErr("HTTP 异步回包内容为空，已丢弃");
-            return;
-        }
+        httpAsyncReplay(seq, body, st, {});
+    }
 
+    /// @brief      线程安全地回复响应（可带自定义响应头）
+    /// @details    任意线程均可调用，内部 post 到 IO 线程执行，避免跨线程碰 socket / parser
+    /// @param[in] seq 请求号（必须用回调里给的 url.seq）
+    /// @param[in] body 响应体（空串会被忽略）
+    /// @param[in] st 状态码
+    /// @param[in] headers 额外响应头（Set-Cookie / X-Request-Id / X-Cache ...）
+    /// @warning    会话已关闭、或当前没有请求在等回包时，本次调用被丢弃
+    /// @note
+    void HttpSession::httpAsyncReplay(unsigned long long seq, const std::string& body, boost::beast::http::status st,
+                                      const ResponseHeaders& headers)
+    {
+        // 注意：空 body 是合法响应（Content-Length: 0），不再被丢弃。
+        // 「暂不回包」请用「回调里什么都不做」表达，而不是传空串。
         auto self = getSession();
 
         boost::asio::post(socket.get_executor(),
-                          [self, seq, body, st]()
+                          [self, seq, body, st, headers]()
                           {
                               // 会话已关闭（超时、对端断开、服务器停止）→ 丢弃
                               if (self->isClosed())
@@ -453,7 +601,7 @@ namespace Net::Server::HttpServer
                                   return;
                               }
 
-                              self->httpReplay(body, st);
+                              self->httpReplayImpl(body, st, headers);
                           });
     }
 
@@ -503,6 +651,48 @@ namespace Net::Server::HttpServer
     {
         auto self = getSession();
         boost::asio::post(socket.get_executor(), [self]() { self->closeWithError(); });
+    }
+
+    /// @brief      半关闭发送方向后把残余请求数据读掉，再关连接
+    /// @details    用于「提前拒绝」场景（413 请求体超限 / 431 请求头超限）：
+    ///              响应已经写出，但对端可能还在灌数据。直接 close 会因为接收缓冲里
+    ///              仍有未读字节而让内核回 RST，客户端常常只看到连接被重置。
+    ///              做法：shutdown(send) 先把 FIN 排在响应字节之后，再把剩余数据读干净
+    ///              （有上限），最后正常关闭，客户端就能稳定收到状态码。
+    /// @warning    仅 IO 线程内调用
+    /// @note       上限 16MB，防止恶意客户端无限灌数据拖死连接
+    void HttpSession::drainThenClose()
+    {
+        boost::system::error_code ec;
+        socket.shutdown(boost::asio::ip::tcp::socket::shutdown_send, ec);
+
+        drainRemaining = 16 * 1024 * 1024;
+        drainStep();
+    }
+
+    /// @brief 排空的一步：读一块丢弃，继续；EOF / 出错 / 到上限就真正关闭
+    /// @note  仅 IO 线程内调用
+    void HttpSession::drainStep()
+    {
+        if (isClosed() || drainRemaining == 0)
+        {
+            closeSession();
+            return;
+        }
+
+        auto self = getSession();
+        socket.async_read_some(boost::asio::buffer(drainBuf),
+                               [self](boost::system::error_code ec, std::size_t n)
+                               {
+                                   if (ec)
+                                   {
+                                       // EOF（对端发完并关闭）或读错误：可以直接关了
+                                       self->closeSession();
+                                       return;
+                                   }
+                                   self->drainRemaining = (n >= self->drainRemaining) ? 0 : self->drainRemaining - n;
+                                   self->drainStep();
+                               });
     }
 
     //========== HttpServer ==========
@@ -784,7 +974,8 @@ namespace Net::Server::HttpServer
                 // 构造函数按值接收 socket，需 std::move(*sock)；
                 // 第 5 个参数是基类的发送队列上限（HTTP 不使用，用具名常量标明语义）
                 auto session = std::make_shared<HttpSession>(ioc, std::move(*sock), HHF, httpTimeOut,
-                                                            kBaseSendQueueUnused, maxHttpHeaderLen, maxHttpSendBufLen);
+                                                            kBaseSendQueueUnused, maxHttpHeaderLen, maxHttpSendBufLen,
+                                                            trustProxy); // 把「是否信任代理头」快照给会话
                 // 开启 TCP_NODELAY（禁用 Nagle，小包立即发送）
                 session->offNoDelay();
                 // 将session放入会话表，由巡检线程统一回收

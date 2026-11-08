@@ -18,6 +18,12 @@ if(@COMMONNET_HTTP_SERVER_ENABLED@)  # @VAR@ 由 configure_package_config_file �
     find_dependency(Boost CONFIG COMPONENTS beast json)  # HTTP 报文解析与 JSON 解析（纯头文件导入目标）
 endif()  # HTTP 服务端库依赖结束
 
+# 出站 HTTP 客户端（Common::Net::HttpClient）链接 OpenSSL：https 的 TLS 由它提供。
+# 只有该库被构建并安装时才需要，开关值由 CMakeLists.txt 在配置期替换进来。
+if(@COMMONNET_HTTP_CLIENT_ENABLED@)
+    find_dependency(OpenSSL)  # 找不到 OpenSSL 时，导出的 Common::Net::HttpClient 会因缺依赖而链接失败
+endif()  # 出站客户端依赖结束
+
 # Utils（本工程的前置依赖库）由 vcpkg 的 utils 端口提供，导入目标 Utils::Utils；
 # Common::Utils / Common::Net::* 的接口上带着它，故必须一并找回
 find_dependency(Utils CONFIG)  # 递归查找 vcpkg 的 utils 包：缺了它，导出的 Common::Utils 会因 Utils::Utils 未定义而导致下游 configure 失败

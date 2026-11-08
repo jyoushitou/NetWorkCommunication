@@ -8,6 +8,7 @@
 /// @copyright   Copyright (c) 2026
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <functional>
@@ -15,6 +16,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <boost/asio.hpp>
@@ -30,6 +32,12 @@
 /// @note
 namespace Net::Server::HttpServer
 {
+
+    /// @brief 响应头列表（名值对，按顺序追加到响应报文）
+    /// @details 供业务设置 Set-Cookie / X-Request-Id / X-Cache 这类头；
+    ///          与库内已有的头同名时以这里为准（Beast 的 set() 会覆盖同名项）
+    /// @note 头名按规范写法书写，值原样输出，不做任何转义
+    using ResponseHeaders = std::vector<std::pair<std::string, std::string>>;
 
     /// @brief 存储一次请求的上下文
     /// @details 名字沿用历史（最早只放 url）；路由删掉之后，这里只保留协议层信息：
@@ -62,6 +70,14 @@ namespace Net::Server::HttpServer
 
         /// @brief 本次请求的请求号（与 httpAsyncReplay 的 seq 参数配对，防止迟到回包串请求）
         unsigned long long seq = 0;
+
+        /// @brief 发起本次请求的客户端 IP（点分十进制，例如 "192.168.1.20"）
+        /// @details 默认取 socket 的对端地址（remote_endpoint）；若 HttpServer 打开了
+        ///          setTrustProxy(true)，则优先用 X-Forwarded-For（取最左一段）或 X-Real-IP，
+        ///          两者都没有时才回退到对端地址
+        /// @note 默认 "0.0.0.0"；取不到（连接已断）时保留默认值。
+        ///       每条请求开始时随 Url 一起重置，随后由 readHead 重新填入
+        std::string requestIP = "0.0.0.0";
     };
 
     /// @brief HTTP 会话前向声明
@@ -99,10 +115,11 @@ namespace Net::Server::HttpServer
         /// @param[in] maxHttpSendBufLen 请求头 / 请求体的长度上限（非正数回退为 10MB）
         /// @warning    构造完成后必须马上交给 shared_ptr 持有，否则 start() 里的
         ///             shared_from_this() 会抛 std::bad_weak_ptr
+        /// @param[in] trustProxy 是否信任代理头来判定客户端 IP（见 HttpServer::setTrustProxy）
         /// @note
         HttpSession(boost::asio::io_context& io, boost::asio::ip::tcp::socket sock,
                     std::shared_ptr<HttpHandleFunction> HF, long long timeout, int maxSendBufLen, int maxHttpHeaderLen,
-                    int maxHttpSendBufLen);
+                    int maxHttpSendBufLen, bool trustProxy = false);
 
         /// @brief      开始（或继续）读取下一条 HTTP 请求
         /// @details    重建解析器 → 清空请求上下文 → 异步读请求头；
@@ -122,17 +139,40 @@ namespace Net::Server::HttpServer
         ///             返回 false 时调用方可以据此关掉卡住的连接（空闲巡检就是这么做的）
         bool httpReplay(const std::string& body, boost::beast::http::status st = boost::beast::http::status::ok);
 
+        /// @brief      发送响应（可带自定义响应头）
+        /// @details    与上面两参版本完全相同，只是在写报文时额外追加 headers；
+        ///              典型用途：Set-Cookie、X-Request-Id、X-Cache
+        /// @param[in] body 响应体
+        /// @param[in] st 状态码
+        /// @param[in] headers 额外响应头（同名的库内默认头会被覆盖）
+        /// @return     报文已交给 socket 返回 true；本条请求已经回过包、本次被丢弃返回 false
+        /// @warning    必须在 IO 线程内调用；业务线程请用带 headers 的 httpAsyncReplay
+        /// @note        每条请求只回一次包，重复调用会被丢弃
+        bool httpReplay(const std::string& body, boost::beast::http::status st, const ResponseHeaders& headers);
+
         /// @brief      线程安全地发送响应
         /// @details    任意线程均可调用，内部 post 到 IO 线程执行；
         ///             用于业务回调返回后，业务完成时主动回包
-        /// @param[in] body 响应体（空串会被忽略）
+        /// @param[in] body 响应体（空串会原样发送，得到 Content-Length: 0 的响应）
         /// @warning    会话已关闭、或当前没有请求在等回包时，本次调用被丢弃
         /// @note
         void httpAsyncReplay(unsigned long long seq, const std::string& body,
                              boost::beast::http::status st = boost::beast::http::status::ok);
 
+        /// @brief      线程安全地发送响应（可带自定义响应头）
+        /// @details    任意线程均可调用，内部 post 到 IO 线程执行；用法同上面的三参版本，
+        ///              只是额外把 headers 写进报文
+        /// @param[in] seq 请求号（必须用回调里给的 url.seq）
+        /// @param[in] body 响应体
+        /// @param[in] st 状态码
+        /// @param[in] headers 额外响应头（Set-Cookie / X-Request-Id / X-Cache ...）
+        /// @warning    会话已关闭、或当前没有请求在等回包时，本次调用被丢弃
+        /// @note
+        void httpAsyncReplay(unsigned long long seq, const std::string& body, boost::beast::http::status st,
+                             const ResponseHeaders& headers);
+
         /// @brief 兼容接口：按"当前请求"回包（等价于 httpAsyncReplay(reqSeq, body, 200)）
-        /// @param[in] body 响应体（空串会被忽略）
+        /// @param[in] body 响应体（空串会原样发送）
         /// @warning 迟到回包有串请求风险，新代码请用带 seq 的版本
         /// @note
         void httpAsyncReplay(const std::string& body);
@@ -162,6 +202,34 @@ namespace Net::Server::HttpServer
         /// @warning    回调在 IO 线程内执行，业务里禁止阻塞
         /// @note       仅 IO 线程内调用；回调返回后不再做任何事（回包与关闭都由回调触发）
         void handleToWork();
+
+        /// @brief 实际组报文并异步写出的实现（带自定义响应头）
+        /// @param[in] body 响应体
+        /// @param[in] st 状态码
+        /// @param[in] headers 额外响应头
+        /// @return 报文已交给 socket 返回 true；重复回包被丢弃返回 false
+        /// @note   仅 IO 线程内调用
+        bool httpReplayImpl(const std::string& body, boost::beast::http::status st, const ResponseHeaders& headers);
+
+        /// @brief 响应写完后「先排空残余请求数据、再关连接」的开关
+        /// @details 提前拒绝（413 请求体超限 / 431 请求头超限）时，对端可能还在灌数据；
+        ///          此时直接 close 会因为接收缓冲里有未读字节而让内核回 RST，
+        ///          客户端常常只看到连接被重置，看不到我们刚发出的状态码。
+        bool drainAfterReply = false;
+
+        /// @brief 排空阶段还能再丢弃多少字节（防止对端无限灌数据把内存/时间拖死）
+        std::size_t drainRemaining = 0;
+
+        /// @brief 排空阶段用的读缓冲
+        std::array<char, 8192> drainBuf{};
+
+        /// @brief 半关闭发送方向，然后把对端残余数据读掉，最后关连接
+        /// @note 仅 IO 线程内调用
+        void drainThenClose();
+
+        /// @brief 排空的一步：读一块丢弃，继续；读到 EOF / 出错 / 到上限就真正关闭
+        /// @note 仅 IO 线程内调用
+        void drainStep();
 
         /// @brief      读取请求体
         /// @details    两段式读取的第二段：在同一个 parser 上续读，读完（含 chunked 解码）后进业务
@@ -194,6 +262,10 @@ namespace Net::Server::HttpServer
 
         /// @brief 当前请求的上下文（业务层只读）
         Url url = Url{};
+
+        /// @brief 是否信任 X-Forwarded-For / X-Real-IP（由 HttpServer 创建会话时传入）
+        /// @details 关闭时 requestIP 一律取 TCP 对端地址；打开后优先取代理头
+        bool trustProxy = false;
 
         /// @brief 业务回调
         std::shared_ptr<HttpHandleFunction> HHF = nullptr;
@@ -261,6 +333,16 @@ namespace Net::Server::HttpServer
         /// @note       幂等，可重复调用
         void stop() override;
 
+        /// @brief      设置「是否用代理头判定客户端 IP」
+        /// @details    默认 false：Url::requestIP 一律取 TCP 对端地址（直连场景，最可靠）。
+        ///              设为 true 后，请求带 X-Forwarded-For 时取它最左边一段（原始客户端），
+        ///              否则看 X-Real-IP，两个头都没有才回退到对端地址。
+        /// @param[in] trust true = 信任 X-Forwarded-For / X-Real-IP
+        /// @warning     **只有服务确实部署在可信反向代理之后才打开**：这两个头客户端可以随便伪造，
+        ///              直接暴露公网时打开等于让任何人自报 IP（可用于刷限流、伪造审计日志）
+        /// @note        在 start() 之前设置；对已 accept 的会话不生效（每个会话创建时快照一次）
+        void setTrustProxy(bool trust) { trustProxy = trust; }
+
     private:
         /// @brief 关闭所有的Http
         void closeHttpAll();
@@ -274,6 +356,10 @@ namespace Net::Server::HttpServer
 
         /// @brief HTTP 监听端点（构造时保存，重启时要用）
         boost::asio::ip::tcp::endpoint epHttp;
+
+        /// @brief 是否信任代理头（X-Forwarded-For / X-Real-IP）来判定客户端 IP
+        /// @details 由 setTrustProxy() 设置，默认关闭；创建新会话时传给 HttpSession
+        bool trustProxy = false;
 
         /// @brief      发起一次异步 accept
         /// @details    成功则创建会话、放进会话表并启动读循环；无论成败都会续接下一次 accept
