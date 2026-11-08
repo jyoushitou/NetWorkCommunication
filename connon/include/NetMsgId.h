@@ -1,7 +1,7 @@
 /// @file        NetMsgId.h
-/// @brief       协议保留消息 ID（0–999）与业务 ID 的唯一定义处
+/// @brief       消息 ID 的唯一定义处：0 = 退出，1–999 特殊命令，1000 起业务
 /// @details     Net 的 12 字节头部里只有 msg_id，没有"命令"字段，所以**ID 本身就是命令**：
-///              保留区间 [0, 999] 由库/框架占用，业务消息从 1000 起。
+///              0 固定为「退出」，1–999 由库/框架/应用分层占用，1000 起才是普通业务消息。
 ///              这个头文件是这段约定的单一来源：新增特殊 ID 只改这里，
 ///              服务端与客户端都从这里取名字，避免两端各写一份数字。
 /// @author      jyoushitou
@@ -28,9 +28,10 @@ namespace Net
     ///              由服务端/客户端在业务层自行遵守
     namespace MsgId
     {
-        /// @brief 连接测试：客户端连上后自动发的那条
-        /// @details payload 固定为 startClient() 传入的文本（默认 "Check connection"）
-        inline constexpr unsigned long long CheckConnection = 0ULL;
+        /// @brief 退出：收到即关闭本次会话
+        /// @details **0 是唯一的"退出"ID**：服务端收到它直接 closeSession()，不进入业务回调。
+        ///          payload 仍可写 "EXIT"（旧约定的兼容路径），但只发 0 就已经足够。
+        inline constexpr unsigned long long Exit = 0ULL;
 
         /// @brief 服务端空闲超时提醒
         /// @details 会话长时间没收到消息时，服务端先发一条提醒再关闭
@@ -39,6 +40,11 @@ namespace Net
         /// @brief 服务端忙超时提醒
         /// @details 业务回调长时间没回包时，服务端发这条提示后断开连接
         inline constexpr unsigned long long ServerBusyTimeout = 2ULL;
+
+        /// @brief 连接测试：客户端连上后自动发的那条
+        /// @details payload 为 startClient() 传入的文本（默认 "Check connection"）
+        /// @note  历史上一度占用 ID 0；现在 0 让给"退出"，它挪到 3
+        inline constexpr unsigned long long CheckConnection = 3ULL;
 
         /// @brief 一条保留 ID 的登记项
         struct Command
@@ -49,12 +55,12 @@ namespace Net
         };
 
         // ── 保留区 [0, 999] 的分段 ───────────────────────────────────────────
-        // 把整段划成三块，好处是"某个 ID 该归谁管"不靠口头约定：
-        //   0–9    库内部命令（目前已用 0/1/2）
-        //   10–99  框架 / 网关命令（登录态、幂等键、链路追踪这类横切能力）
+        // 0 单独固定为"退出"，1–999 才是特殊命令区，1000 起是普通业务：
+        //   0       退出（Exit）
+        //   1–9     库内部命令（目前已用 1/2/3）
+        //   10–99   框架 / 网关命令（登录态、幂等键、链路追踪这类横切能力）
         //   100–999 应用自定义特殊命令（业务里全局广播、管理指令等）
-        // 1000 起才是普通业务消息。
-        inline constexpr unsigned long long kLibraryIdBegin = 0ULL;        ///< 库内部命令起点
+        inline constexpr unsigned long long kLibraryIdBegin = 1ULL;        ///< 库内部命令起点（0 已固定给 Exit）
         inline constexpr unsigned long long kLibraryIdEnd = 9ULL;          ///< 库内部命令终点
         inline constexpr unsigned long long kFrameworkIdBegin = 10ULL;     ///< 框架命令起点
         inline constexpr unsigned long long kFrameworkIdEnd = 99ULL;       ///< 框架命令终点
@@ -64,7 +70,8 @@ namespace Net
         /// @brief 一个 msg_id 所属的区段
         enum class Range
         {
-            Library,     ///< [0, 9]    库内部
+            Exit,        ///< 0：退出
+            Library,     ///< [1, 9]    库内部
             Framework,   ///< [10, 99]  框架 / 网关
             Application, ///< [100, 999] 应用自定义特殊命令
             Business,    ///< [1000, ...] 普通业务消息
@@ -76,6 +83,10 @@ namespace Net
         /// @note   编译期可用；`IsReserved()` 等价于 `Classify(id) != Range::Business`
         constexpr Range Classify(unsigned long long id) noexcept
         {
+            if (id == Exit)
+            {
+                return Range::Exit;
+            }
             if (id <= kLibraryIdEnd)
             {
                 return Range::Library;
@@ -98,6 +109,8 @@ namespace Net
         {
             switch (range)
             {
+            case Range::Exit:
+                return "Exit";
             case Range::Library:
                 return "Library";
             case Range::Framework:
@@ -112,10 +125,11 @@ namespace Net
         /// @brief 已知的保留 ID 清单
         /// @details 新增特殊 ID 时**只在这里加一条**，并同步更新文档；
         ///          这样 `NameOf()` 自动可用，两端也不会各写一份数字
-        inline constexpr std::array<Command, 3> kCommands{{
-            {CheckConnection, "CheckConnection", "客户端连接成功后自动发送的连接测试"},
+        inline constexpr std::array<Command, 4> kCommands{{
+            {Exit, "Exit", "退出：收到即关闭会话（唯一的退出 ID）"},
             {ServerTimeout, "ServerTimeout", "服务端空闲超时提醒（发完即关闭）"},
             {ServerBusyTimeout, "ServerBusyTimeout", "服务端忙超时提醒（业务长时间未回包）"},
+            {CheckConnection, "CheckConnection", "客户端连接成功后自动发送的连接测试"},
         }};
 
         /// @brief  判断是否落在保留区间（< 1000）

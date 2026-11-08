@@ -60,11 +60,20 @@ namespace Net
         /// @note       未设置回调函数（HF 为空）时也会关闭会话
         void Session::recvToWork(const unsigned long long msg_id, std::string msg)
         {
-            // 输出收到的消息
-            Utils::Out::outNetMsg(msg_id, "收到客户端消息:" + msg);
+            // 只提示"收到了多大的一条消息"，不打消息体：
+            // 业务口是 protobuf 二进制，直接往控制台打会刷屏，还会把终端编码搞乱
+            Utils::Out::outNetMsg(msg_id, "收到客户端消息，长度 " + std::to_string(msg.size()) + " 字节");
 
             // 获得自身指针
             auto self = getSession();
+
+            // 约定：msg_id == Net::MsgId::Exit(0) 即退出，直接关会话，不进入业务回调
+            if (msg_id == Net::MsgId::Exit)
+            {
+                Utils::Out::outMsg("收到退出 ID(0)，关闭会话");
+                closeSession();
+                return;
+            }
 
             if (msg == CloseCommand)
             {

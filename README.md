@@ -609,7 +609,8 @@ client->toSend(1001, "查询订单: 20240001");
 
 | 场景                       | 消息 ID 用法                                                 |
 | -------------------------- | ------------------------------------------------------------ |
-| 连接测试                   | 库内部连接成功后自动 `toSend(Net::MsgId::CheckConnection /* 0 */, "Check connection")` |
+| 连接测试                   | 库内部连接成功后自动 `toSend(Net::MsgId::CheckConnection /* 3 */, "Check connection")` |
+| 退出会话                   | 发 `msg_id = Net::MsgId::Exit /* 0 */`，服务端收到即 `closeSession()`（payload 写 "EXIT" 也兼容） |
 | 服务端超时提醒             | 库内部使用 `Net::MsgId::ServerTimeout`(1) / `ServerBusyTimeout`(2) |
 | 需要命令字区分业务         | `toSend(1001, data)` 显式指定，服务端按 ID 分发              |
 | 需要追踪一条消息的完整链路 | 发送端记录分配的 ID，服务端用同一 ID 回复                    |
@@ -619,7 +620,8 @@ client->toSend(1001, "查询订单: 20240001");
 
 | 区间 | 归属 | 已登记 |
 | --- | --- | --- |
-| 0–9 | 库内部命令 | `0` `CheckConnection`、`1` `ServerTimeout`、`2` `ServerBusyTimeout` |
+| `0` | 退出 | `Exit`：收到即关闭会话，不进入业务回调 |
+| 1–9 | 库内部命令 | `1` `ServerTimeout`、`2` `ServerBusyTimeout`、`3` `CheckConnection` |
 | 10–99 | 框架 / 网关命令 | 待登记（登录态、幂等键、链路追踪这类横切能力） |
 | 100–999 | 应用自定义特殊命令 | 待登记（全局广播、管理指令等） |
 | ≥1000 | 普通业务消息 | — |
@@ -628,7 +630,7 @@ client->toSend(1001, "查询订单: 20240001");
 #include "NetMsgId.h"
 
 constexpr bool reserved = Net::MsgId::IsReserved(999);      // true
-constexpr auto range    = Net::MsgId::Classify(50);         // Net::MsgId::Range::Framework
+constexpr auto range    = Net::MsgId::Classify(0);          // Net::MsgId::Range::Exit
 constexpr auto name     = Net::MsgId::NameOf(1);            // "ServerTimeout"
 ```
 
