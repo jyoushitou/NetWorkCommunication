@@ -385,6 +385,7 @@ endif() # 出站 HTTP 客户端库开关结束
 #       其包含目录仍由 Utils::Utils 导入目标提供。
 set(COMMONNET_PUBLIC_HEADERS # 公开头文件清单：<源文件相对路径>|<安装用子目录>（用 | 分隔，避开 CMake 列表的 ; 语义）
     "connon/include/NetConnection.h|Common/Net/Core" # 核心库头文件
+    "connon/include/NetMsgId.h|Common/Net/Core" # 保留消息 ID（0–999 保留区）的唯一定义处
     "Server/include/NetServer.h|Common/Net/Server" # 服务端库头文件
     "Client/include/NetClient.h|Common/Net/Client") # 客户端库头文件
 
@@ -465,6 +466,7 @@ endif() # 出站客户端库安装结束
 # 其包含目录由 vcpkg 的导入目标提供，故 #include "Message.h" 依旧能找到
 install(FILES # 安装核心头文件
     connon/include/NetConnection.h # 供下游 #include "NetConnection.h"
+    connon/include/NetMsgId.h # 保留消息 ID 的唯一定义处（0–999 保留区）
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/Common/Net/Core) # 落到 include/Common/Net/Core，与上面的 INSTALL_INTERFACE 一致
 
 install(FILES # 安装服务端头文件

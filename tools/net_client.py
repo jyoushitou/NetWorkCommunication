@@ -44,17 +44,19 @@ HEAD_ID_LENGTH = 8                 # msg_id 字段长度
 HEAD_LEN_LENGTH = 4                # len 字段长度
 HEAD_LENGTH = HEAD_ID_LENGTH + HEAD_LEN_LENGTH  # 12
 MAX_LENGTH = 1024 * 1024           # 单条消息体上限 1 MiB
-CHECK_CONNECTION_MSG_ID = 0        # 连接测试（客户端连上后先发这条）
+EXIT_MSG_ID = 0                    # 退出：服务端收到这个 ID 即关闭会话
 SERVER_TIMEOUT_MSG_ID = 1          # 服务端：空闲超时提醒
 SERVER_BUSY_TIMEOUT_MSG_ID = 2     # 服务端：忙超时提醒
-DEFAULT_MSG_ID = 1000              # 业务消息起始 ID（README 约定从 1000 起）
-CLOSE_COMMAND = "EXIT"             # 收到内容恰为 EXIT 的消息即关闭会话
+CHECK_CONNECTION_MSG_ID = 3        # 连接测试（客户端连上后先发这条）
+DEFAULT_MSG_ID = 1000              # 业务消息起始 ID（1–999 为特殊命令区）
+CLOSE_COMMAND = "EXIT"             # 兼容路径：内容恰为 EXIT 也会关闭会话
 REPLY_TEXT = "服务器已经收到消息"   # 与 examples/Server/main.cpp 的回包保持一致
 
 _RESERVED = {
-    CHECK_CONNECTION_MSG_ID: "check-connection",
+    EXIT_MSG_ID: "exit",
     SERVER_TIMEOUT_MSG_ID: "server-timeout-reminder",
     SERVER_BUSY_TIMEOUT_MSG_ID: "server-busy-reminder",
+    CHECK_CONNECTION_MSG_ID: "check-connection",
 }
 
 _print_lock = threading.Lock()
@@ -226,7 +228,8 @@ def run_client(args: argparse.Namespace) -> int:
         print("\n收到 Ctrl+C，正在退出…", flush=True)
     finally:
         if args.send_exit and not client.closed:
-            client.send(args.id if args.id is not None else next_id, CLOSE_COMMAND)
+            # 退出用 ID 0（服务端收到即关会话）；payload 仍带 "EXIT" 走兼容路径
+            client.send(EXIT_MSG_ID, CLOSE_COMMAND)
         client.close()
     return exit_code
 

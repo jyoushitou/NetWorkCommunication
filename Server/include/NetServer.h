@@ -40,11 +40,12 @@ namespace Net
         /// @brief 服务端主动通知的保留消息 ID
         /// @details 与客户端连接测试（Net::CheckConnectionReturnMsgId = 0）区分开：
         ///          0 = 连接测试，1 = 空闲超时提醒，2 = 忙超时提醒；业务消息建议从 1000 起
-        /// @note 协议本身不校验 ID 区间，这里只是约定
-        inline constexpr unsigned long long ServerTimeoutMsgId = 1ULL;
+        /// @note 实际取值来自 NetMsgId.h 的 Net::MsgId::ServerTimeout，这里保留旧名字做兼容
+        inline constexpr unsigned long long ServerTimeoutMsgId = MsgId::ServerTimeout;
 
         /// @brief 服务端忙超时提醒的保留消息 ID
-        inline constexpr unsigned long long ServerBusyTimeoutMsgId = 2ULL;
+        /// @note  实际取值来自 NetMsgId.h 的 Net::MsgId::ServerBusyTimeout
+        inline constexpr unsigned long long ServerBusyTimeoutMsgId = MsgId::ServerBusyTimeout;
 
         /// @brief 连接会话前向声明
         class Session;

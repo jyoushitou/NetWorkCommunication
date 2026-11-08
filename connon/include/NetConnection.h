@@ -12,6 +12,8 @@
 
 #include <boost/asio.hpp>
 
+#include "NetMsgId.h" // 保留消息 ID 的唯一定义处（0 连接测试 / 1 空闲超时 / 2 忙超时；业务从 1000 起）
+
 namespace Net
 {
     /// @brief      消息ID长度
@@ -39,8 +41,8 @@ namespace Net
     /// @details    客户端连接成功后发的那条 "check connection" 用它；
     ///             服务端超时提醒用 Net::Server::ServerTimeoutMsgId(1)/ServerBusyTimeoutMsgId(2)，
     ///             业务消息建议从 1000 起
-    /// @note       协议本身不校验 ID 区间，这里只是约定
-    inline constexpr unsigned long long CheckConnectionReturnMsgId = 0ULL;
+    /// @note       实际取值来自 NetMsgId.h 的 Net::MsgId::CheckConnection，这里保留旧名字做兼容
+    inline constexpr unsigned long long CheckConnectionReturnMsgId = MsgId::CheckConnection;
 
     /// @brief      无效消息 ID（全 1）
     /// @details    没有 ID 的 RecvNode 用它与真实 ID 区分
