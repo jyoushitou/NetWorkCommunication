@@ -605,26 +605,38 @@ client->Connect();
 client->toSend(1001, "查询订单: 20240001");
 ```
 
-### 4. 消息 ID 使用约定（建议）
+### 4. 消息 ID 使用约定
 
 | 场景                       | 消息 ID 用法                                                 |
 | -------------------------- | ------------------------------------------------------------ |
-| 连接测试                   | 库内部连接成功后自动 `toSend(Net::kConnCheckMsgId /* 0 */, "check connection")` |
-| 服务端超时提醒             | 库内部使用 `kServerTimeoutMsgId`(1) / `kServerBusyTimeoutMsgId`(2) |
+| 连接测试                   | 库内部连接成功后自动 `toSend(Net::MsgId::CheckConnection /* 0 */, "Check connection")` |
+| 服务端超时提醒             | 库内部使用 `Net::MsgId::ServerTimeout`(1) / `ServerBusyTimeout`(2) |
 | 需要命令字区分业务         | `toSend(1001, data)` 显式指定，服务端按 ID 分发              |
 | 需要追踪一条消息的完整链路 | 发送端记录分配的 ID，服务端用同一 ID 回复                    |
 | 自动生成唯一 ID            | 调用方自行维护计数器（示例中为 `std::atomic` 的 `g_msg_id`） |
 
-保留 ID 表（定义在 `connon/include/NetConnection.h` 与 `Server/include/NetServer.h`）：
+`msg_id` 的区间约定集中定义在 **`connon/include/NetMsgId.h`**（`Net::MsgId` 命名空间），业务代码里不要再写裸数字：
 
-| ID | 常量 | 含义 |
+| 区间 | 归属 | 已登记 |
 | --- | --- | --- |
-| 0 | `Net::kConnCheckMsgId` | 客户端连接测试 |
-| 1 | `Net::Server::kServerTimeoutMsgId` | 服务端空闲超时提醒 |
-| 2 | `Net::Server::kServerBusyTimeoutMsgId` | 服务端忙超时提醒 |
-| ≥1000 | — | 业务消息（建议起点） |
+| 0–9 | 库内部命令 | `0` `CheckConnection`、`1` `ServerTimeout`、`2` `ServerBusyTimeout` |
+| 10–99 | 框架 / 网关命令 | 待登记（登录态、幂等键、链路追踪这类横切能力） |
+| 100–999 | 应用自定义特殊命令 | 待登记（全局广播、管理指令等） |
+| ≥1000 | 普通业务消息 | — |
+
+```cpp
+#include "NetMsgId.h"
+
+constexpr bool reserved = Net::MsgId::IsReserved(999);      // true
+constexpr auto range    = Net::MsgId::Classify(50);         // Net::MsgId::Range::Framework
+constexpr auto name     = Net::MsgId::NameOf(1);            // "ServerTimeout"
+```
+
+新增一个特殊 ID 时只需要在 `Net::MsgId::kCommands` 里加一条（`id` / `name` / `note`）：
+`NameOf()` 自动可用，区间归属由 `Classify()` 统一判定，不必改别处。
 
 > 本库**不会**自动分配消息 ID：`toSend` / `reply` 均要求显式传入 `msg_id`，需要自增 ID 时由业务侧自行维护。
+> 区间是**约定**而非校验：`toSend` 接受任意 `uint64`，协议层没有"非法 ID"的概念。
 
 ## 设计说明
 
